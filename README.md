@@ -29,6 +29,7 @@ Clone the repository and install the dependencies:
 git clone [https://github.com//marine-heatwave-detector.git](https://github.com/tu-usuario/marine-heatwave-detector.git)
 cd marine-heatwave-detector
 pip install -r requirements.txt
+```
 
 ⚙️ Input Specifications
 The script expects a NetCDF file with the following characteristics:
@@ -42,15 +43,19 @@ Open mhw_detector.py.
 
 Edit the CONFIGURATION section at the bottom of the script:
 
+```bash
 # --- CONFIGURATION ---
 INPUT_FILE = './data/GLORYS_1993-2024.nc'
 OUTPUT_FILE = './results/MHW_output.nc'
 VAR_NAME = 'thetao'  # Variable name in your NetCDF
 CLIM_START = 1993
 CLIM_END = 2022
+```
 
 Run the script:
+```bash
 python mhw_detector.py
+```
 
 📊 Output Specifications
 The output is a NetCDF file containing the computed MHW metrics. The data is masked: grid points without an active MHW event are filled with NaN.
