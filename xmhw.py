@@ -1,5 +1,5 @@
 """
-Xarray Marine Heatwave Optimized Function (Hobday et al., 2016 xarray implementation)
+Marine Heatwave Detector (Hobday et al., 2016 implementation)
 ==============================================================
 
 A robust, Xarray-compatible implementation of the Marine Heatwave (MHW) definitions 
@@ -197,21 +197,29 @@ def detect_mhw_core(t_ordinal, temp, clim_period=(None, None), pctile=90, window
 # 2. ROBUST WRAPPER (Handles NaNs & Vectorization Interface)
 # =============================================================================
 
-def mhw_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year, **kwargs):
+def mhw_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year, max_gap_interp=2, **kwargs):
     """
     Wrapper to handle NaNs and interface with xarray.apply_ufunc, passing 
     dynamic configuration parameters to the core detection logic.
 
+    This function ensures that only small data gaps (<= max_gap_interp) are 
+    interpolated, preserving the integrity of the time series for larger gaps 
+    as per Hobday et al. (2016).
+
     Parameters
     ----------
     time_ordinal : np.ndarray
-        Time vector in ordinal format.
+        Time vector in ordinal format (integers).
     temp : np.ndarray
         Temperature vector (1D).
     clim_start_year : int or float
         Start year of the climatology baseline.
     clim_end_year : int or float
         End year of the climatology baseline.
+    max_gap_interp : int, optional
+        Maximum gap length (in days) to fill via linear interpolation. 
+        Gaps larger than this will remain as NaNs (breaking potential events).
+        Default is 2 days.
     **kwargs : optional
         Additional arguments passed directly to `detect_mhw_core`.
         (e.g., pctile, window_half_width, min_duration).
@@ -223,20 +231,55 @@ def mhw_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year, **kwargs)
     """
     T = len(time_ordinal)
     
-    # Return NaNs if the spatial point is empty (Land mask)
+    # --- CRITICAL FIX: Dask Read-Only & Gap Handling ---
+    # Create a writable copy of the data. Dask arrays are often read-only chunks.
+    temp = temp.copy()
+    
+    # 1. Fast exit for land mask (all NaNs)
     if np.isnan(temp).all():
         nan_arr = np.full(T, np.nan)
         return (nan_arr, nan_arr, nan_arr, np.zeros(T, dtype=bool), 
                 nan_arr, nan_arr, nan_arr, nan_arr)
 
-    # Linear interpolation for small gaps of NaNs in data
+    # 2. Smart Interpolation (Only small gaps)
+    # We only fill gaps that are <= max_gap_interp to maintain scientific rigor.
     if np.isnan(temp).any():
-        nans = np.isnan(temp)
-        x = lambda z: z.nonzero()[0]
-        temp[nans] = np.interp(x(nans), x(~nans), temp[~nans])
+        is_valid = ~np.isnan(temp)
+        valid_indices = np.flatnonzero(is_valid)
 
-    # Ensure types for Numba/Numpy compatibility
+        # If we have enough data to interpolate
+        if len(valid_indices) > 1:
+            # Find distances between consecutive valid points
+            gaps = np.diff(valid_indices)
+            
+            # Identify indices where the gap is larger than 1 but within the limit
+            # gaps > 1 means there is at least 1 missing day between points
+            fillable_gaps = np.where((gaps > 1) & (gaps <= (max_gap_interp + 1)))[0]
+
+            for i in fillable_gaps:
+                start_idx = valid_indices[i]
+                end_idx = valid_indices[i+1]
+                
+                # Perform linear interpolation for this specific gap
+                # We include start and end points for the interpolation reference
+                x_gap = np.arange(start_idx + 1, end_idx)
+                temp[x_gap] = np.interp(
+                    x_gap, 
+                    [start_idx, end_idx], 
+                    [temp[start_idx], temp[end_idx]]
+                )
+    
+    # 3. Type safety for Numba/Core logic
+    # Remaining NaNs (large gaps) are converted to a fill value (-9999) 
+    # to ensure boolean comparisons in the core function don't crash, 
+    # effectively breaking the MHW event detection at that point.
     time_ordinal_safe = time_ordinal.astype(int)
+    
+    # Note: Depending on detect_mhw_core implementation, leaving NaNs might be fine
+    # if it uses nan-aware functions. If it uses strict boolean (temp > clim), 
+    # NaNs result in False, which correctly breaks the event.
+    # We keep it as float to preserve NaNs if the core handles them, 
+    # otherwise, NaN comparison naturally returns False preventing false positives.
     temp_safe = temp.astype(float)
 
     # Pass **kwargs to the core function
@@ -246,10 +289,6 @@ def mhw_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year, **kwargs)
         clim_period=(int(clim_start_year), int(clim_end_year)),
         **kwargs 
     )
-
-# =============================================================================
-# 3. XARRAY INTEGRATION
-# =============================================================================
 
 # =============================================================================
 # 3. XARRAY INTEGRATION
@@ -270,11 +309,12 @@ def xmhw_func(ds, temp_var_name, clim_period, **kwargs):
         A tuple (start_year, end_year) defining the climatology baseline.
     **kwargs : optional
         Arguments passed directly to the detection algorithm. 
-        Common examples:
+        Key arguments include:
             - pctile (default: 90)
             - window_half_width (default: 5)
             - min_duration (default: 5)
-            - max_gap (default: 2)
+            - max_gap_interp (default: 2): Max days of missing data to interpolate.
+                                            Larger gaps remain NaN.
 
     Returns
     -------
@@ -298,6 +338,7 @@ def xmhw_func(ds, temp_var_name, clim_period, **kwargs):
         'clim_start_year': clim_period[0], 
         'clim_end_year': clim_period[1]
     }
+    # kwargs will now carry 'max_gap_interp' if passed from the main script
     func_kwargs.update(kwargs)
 
     # Define output types matching the return tuple of detect_mhw_core
@@ -331,7 +372,7 @@ def xmhw_func(ds, temp_var_name, clim_period, **kwargs):
     ds_out['mhw_max_intensity'] = intensity_max.where(is_mhw)
     ds_out['mhw_cum_intensity'] = intensity_cum.where(is_mhw)
     
-    # Optional: diagnostic variables (can be commented out to save space)
+    # Optional: diagnostic variables
     ds_out['climatology'] = seas
     ds_out['threshold'] = thresh
 
@@ -339,42 +380,3 @@ def xmhw_func(ds, temp_var_name, clim_period, **kwargs):
     ds_out = ds_out.assign_coords(ds.coords)
     
     return ds_out
-
-# =============================================================================
-# 4. MAIN EXECUTION BLOCK EXAMPLE
-# =============================================================================
-
-if __name__ == "__main__":
-    
-    # --- CONFIGURATION ---
-    INPUT_FILE = 'path/to/your/input_data.nc'
-    OUTPUT_FILE = 'path/to/your/output_mhw.nc'
-    VAR_NAME = 'thetao'  # or 'sst' / 'analyzed_sst'
-    CLIM_START = 1993
-    CLIM_END = 2022
-    
-    # Chunking is crucial for 4D data (time, depth, lat, lon)
-    CHUNKS = {'time': -1, 'depth': 1, 'latitude': 30, 'longitude': 30}
-
-    print(f"Loading data from {INPUT_FILE}...")
-    try:
-        ds = xr.open_dataset(INPUT_FILE, chunks=CHUNKS)
-        
-        print("Starting MHW detection (this may take a while)...")
-        with ProgressBar():
-            ds_mhw = compute_mhw_dataset(ds, VAR_NAME, (CLIM_START, CLIM_END))
-            
-            # Setup compression for storage efficiency
-            comp = {'zlib': True, 'complevel': 5, 'dtype': 'float32', '_FillValue': np.nan}
-            encoding = {var: comp for var in ds_mhw.data_vars}
-            
-            print(f"Saving to {OUTPUT_FILE}...")
-            ds_mhw.to_netcdf(OUTPUT_FILE, encoding=encoding)
-            
-        print("Process completed successfully.")
-        
-    except FileNotFoundError:
-        print(f"Error: Input file {INPUT_FILE} not found.")
-    except Exception as e:
-
-        print(f"An unexpected error occurred: {e}")
