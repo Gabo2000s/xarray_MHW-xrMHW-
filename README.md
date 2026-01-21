@@ -23,11 +23,10 @@ This tool is designed to process **large-scale oceanographic datasets** (global 
 
 ## 🛠 Installation
 
-Clone the repository and install the dependencies:
+Install the dependencies:
 
 ```bash
-!conda install git -y
-!git clone https://github.com/Gabo2000s/xarray_MHW-xmhw-.git
+pip install xarray dask netCDF4 scipy pandas numpy
 ```
 
 ⚙️ Input Specifications
@@ -49,8 +48,8 @@ To integrate the **xMHW** detector into your oceanographic analysis workflow, fo
 Download the source code directly from GitHub:
 
 ```bash
-git clone [https://github.com/Gabo2000s/xarray_MHW-xmhw-.git](https://github.com/Gabo2000s/xarray_MHW-xmhw-.git)
-cd xarray_MHW-xmhw-
+!conda install git -y
+!git clone https://github.com/Gabo2000s/xarray_MHW-xmhw-.git
 ```
 
 2. Open xmhw.py.
