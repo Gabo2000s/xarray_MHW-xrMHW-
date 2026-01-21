@@ -26,7 +26,8 @@ This tool is designed to process **large-scale oceanographic datasets** (global 
 Clone the repository and install the dependencies:
 
 ```bash
-git clone [https://github.com//marine-heatwave-detector.git](https://github.com/Gabo2000s/xarray_MHW-xmhw-))
+!conda install git -y
+!git clone https://github.com/Gabo2000s/xarray_MHW-xmhw-.git
 ```
 
 ⚙️ Input Specifications
