@@ -3,7 +3,7 @@
 A high-performance, parallelized Python implementation of the Marine Heatwave (MHW) detection definitions proposed by [Hobday et al. (2016)](https://doi.org/10.1016/j.pocean.2015.12.014). Code developed by Gutiérrez-Cárdenas, GS. (ORCID: 0000-0002-3915-7684; DEC 2025)
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
-![License](https://img.shields.io/badge/License-Apache2.0-green)
+![License](https://img.shields.io/badge/License-GPL-3.0-green)
 ![Status](https://img.shields.io/badge/Status-Active-success)
 
 ## 🌊 Overview
