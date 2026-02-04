@@ -9,8 +9,8 @@ Longitude, Depth, Time).
 
 Author: Gutiérrez-Cárdenas, GS. (ORCID: 0000-0002-3915-7684)
 Date: Dec 2025
-Update: Jan 2026
-License: MIT
+Update: Feb 2026
+License: GPL3.0
 """
 
 import xarray as xr
@@ -30,7 +30,9 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 def detect_mhw_core(t_ordinal, temp, clim_period=(None, None), pctile=90, window_half_width=5, 
                     smooth_pctile=True, smooth_width=31, min_duration=5, 
-                    join_across_gaps=True, max_gap=2, cold_spells=False):
+                    join_across_gaps=True, max_gap=2, cold_spells=False,
+                    join_method='post-filter'):
+    
     """
     Core detection algorithm for Marine Heatwaves (or Cold Spells) on a single 1D time series.
     Based on Hobday et al. (2016) marine heatwave definition. Edited and optimized from 
@@ -123,13 +125,16 @@ def detect_mhw_core(t_ordinal, temp, clim_period=(None, None), pctile=90, window
 
     # Smooth the climatology/threshold 
     if smooth_pctile:
-        # Simple circular moving average implementation inline to keep function self-contained
-        def simple_runavg(ts, w):
-            ts_pad = np.concatenate((ts[-w//2:], ts, ts[:w//2]))
-            return np.convolve(ts_pad, np.ones(w)/w, mode='valid')
-            
-        thresh_clim_year = simple_runavg(thresh_clim_year, smooth_width)
-        seas_clim_year = simple_runavg(seas_clim_year, smooth_width)
+            # Moving average function with periodic extension
+            def simple_runavg(ts, w):
+                N = len(ts)
+                ts_triple = np.concatenate((ts, ts, ts))
+                ts_smooth = np.convolve(ts_triple, np.ones(w)/w, mode='same')
+                return ts_smooth[N:2*N]
+                
+            # Aplicación del suavizado a los umbrales y climatología estacional
+            thresh_clim_year = simple_runavg(thresh_clim_year, smooth_width)
+            seas_clim_year = simple_runavg(seas_clim_year, smooth_width)
 
     # Map back to full time series
     clim_thresh = thresh_clim_year[doy - 1]
@@ -141,25 +146,50 @@ def detect_mhw_core(t_ordinal, temp, clim_period=(None, None), pctile=90, window
     else:
         exceed_bool = temp > clim_thresh
 
-    # Fills small gaps (<= max_gap) with True This ensures fragmented events are treated as a continuous event.
-    if join_across_gaps:
-        # Find gaps: regions where exceed_bool is False
+    # Physic union before filtering (original architechture xrMHW) ---
+    if join_across_gaps and join_method == 'pre-filter':
         gaps_label, n_gaps = ndimage.label(~exceed_bool)
-        
         if n_gaps > 0:
-            # Get index slices for all gaps
             gap_slices = ndimage.find_objects(gaps_label)
-            
             for sl in gap_slices:
-                # Calculate gap length
                 gap_len = sl[0].stop - sl[0].start
+                if gap_len <= max_gap and (sl[0].start > 0) and (sl[0].stop < len(temp)):
+                    exceed_bool[sl] = True
+
+    # Tag initial events
+    events, n_events = ndimage.label(exceed_bool)
+
+    # Filter minimmum duration
+    for ev in range(1, n_events + 1):
+        if (events == ev).sum() < min_duration:
+            events[events == ev] = 0
+
+    # Post-filter union (Similar to Oliver 2015) ---
+    if join_across_gaps and join_method == 'post-filter':
+    # 1. Re-etiquetamos solo los eventos que sobrevivieron al filtro de 5 días
+        events, n_events = ndimage.label(events > 0)
+        
+        if n_events > 1:
+            ev_slices = ndimage.find_objects(events)
+            # Iteramos de atrás hacia adelante para no corromper los índices al unir
+            for i in range(len(ev_slices) - 1, 0, -1):
+                # gap_start es el 'stop' del evento anterior (primer índice del gap)
+                gap_start = ev_slices[i-1][0].stop 
+                # gap_end es el 'start' del evento actual (índice donde termina el gap)
+                gap_end = ev_slices[i][0].start
                 
-                if gap_len <= max_gap: 
-                    if (sl[0].start > 0) and (sl[0].stop < T):
-                        # Ensure both neighbors are True (strictly connecting two events)
-                        # Since gaps_label labels False regions, indices immediately outside
-                        # the slice must be True by definition.
-                        exceed_bool[sl] = True
+                # El número de días entre eventos es simplemente la resta
+                gap_len = gap_end - gap_start 
+                
+                if gap_len <= max_gap:
+                    # Unimos físicamente rellenando con True en la máscara original
+                    exceed_bool[gap_start:gap_end] = True
+            
+            # 2. Consolidamos: Re-etiquetamos y aplicamos el filtro de duración final
+            events, n_events = ndimage.label(exceed_bool)
+            for ev in range(1, n_events + 1):
+                if (events == ev).sum() < min_duration:
+                    events[events == ev] = 0
 
     # Label connected events
     events, n_events = ndimage.label(exceed_bool)
@@ -457,5 +487,4 @@ def xrMHW_func(ds, temp_var_name, clim_period, **kwargs):
     ds_out.attrs['mhw_detection_period'] = str(clim_period)
     ds_out.attrs['mhw_type'] = 'Cold Spell' if func_kwargs['cold_spells'] else 'Heatwave'
     
-
     return ds_out
