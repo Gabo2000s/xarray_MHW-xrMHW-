@@ -1,0 +1,23 @@
+{
+  "provenance": {
+    "timestamp_utc": "2026-09-23T00:28:26+00:00",
+    "host": "Gabo",
+    "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+    "physical_cores": 14,
+    "logical_cores": 20,
+    "total_ram_gib": 63.7,
+    "os": "Windows 10",
+    "python": "3.11.16",
+    "xrMHW_version": "3.0.0",
+    "xrMHW_origin": "D:\\Proyectos\\xarray_MHW-xrMHW-\\xrMHW.py",
+    "xrMHW_install_mode": "editable",
+    "numpy": "1.26.4",
+    "xarray": "2026.7.0",
+    "dask": "2026.8.0",
+    "scipy": "1.17.1",
+    "threads_pinned_to": "1",
+    "dask_threads": 14
+  },
+  "notes": [],
+  "chunk_side_used": 4
+}

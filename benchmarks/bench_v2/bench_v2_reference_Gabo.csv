@@ -1,0 +1,4 @@
+phase,tool,cells,timesteps,seconds,cell_steps_per_s,threshold_s,detect_s
+reference,xrMHW (in-memory),256,12017,1.2601063000038266,2441343.2422254044,,
+reference,marineHeatWaves (cell by cell),256,12017,23.709956300037447,129749.37452732214,,
+reference,xmhw [grid],256,12017,142.85471079999115,21534.8306175717,128.860585300019,13.994125499972142

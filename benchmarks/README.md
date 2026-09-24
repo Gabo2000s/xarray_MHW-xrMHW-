@@ -9,7 +9,7 @@ paper.
 | `make_fig_performance.py` | Draws Figure 1 from the CSV files. |
 | `bench_v2/` | Results with Dask's threaded scheduler, and the in-memory and reference phases. |
 | `bench_v2_proc/` | Results with a `LocalCluster` of worker processes (one thread each). |
-| `fig_performance.png`, `.pdf` | Figure 1 as it appears in the paper. |
+| `fig_performance.png` | Figure 1 as it appears in the paper (`make_fig_performance.py` also writes a PDF). |
 
 ## Setup used for the paper
 
@@ -34,6 +34,8 @@ the Copernicus Marine Data Store to reproduce the runs.
 | `reference` | xrMHW, marineHeatWaves (Oliver) and xmhw on the same 256 surface cells |
 
 ## Running
+
+Examples of the calls used for the paper:
 
 ```bash
 python benchmark_xrMHW_v3_2.py --input GLORYS_GrandBanks_1993_2025.nc --var thetao \

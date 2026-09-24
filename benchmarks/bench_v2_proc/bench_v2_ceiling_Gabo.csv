@@ -1,0 +1,2 @@
+phase,label,workers,write_format,write_error,cells,timesteps,raw_bytes,projected_in_memory_bytes,fits_in_memory,chunk_side,n_chunks,detect_s,write_s,write_resolved,total_s,n_output_vars,peak_rss_bytes,written_bytes,peak_over_raw,detect_cell_steps_per_s,cell_steps_per_s
+ceiling,d33x97x109,14,zarr,,348909,12017,33542715624,243238356618.99838,False,8,182,269.10024830000475,0.0,False,160.36904329998652,1,23360593920,1212077932,0.6964431318520128,15580957.20642234,26144942.73160232
