@@ -1,0 +1,26 @@
+# Conda environment for the xrMHW example notebooks.
+#   conda env create -f examples/environment.yml
+#   conda activate xrmhw-examples
+#   pip install -e .          (from the repository root, installs xrMHW itself)
+name: xrmhw-examples
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - xarray
+  - dask
+  - distributed
+  - netcdf4
+  - zarr
+  - pooch
+  - matplotlib
+  - cartopy
+  - cmocean
+  - plotly
+  - nbformat
+  - jupyterlab
+  - ipykernel
+  - pip
