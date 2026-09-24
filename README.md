@@ -6,7 +6,7 @@ A high-performance, parallelized Python implementation of the Marine Heatwave (M
 ![License](https://img.shields.io/badge/License-GPL3.0-green)
 ![Status](https://img.shields.io/badge/Status-Active-success)
 
-## 🌊 Overview
+## Overview
 
 This tool is designed to process **large-scale oceanographic datasets** (global ocean circulation models, eddy-resolving models, SST data) that are multidimensional (Latitude, Longitude, Depth, Time). Unlike standard 1D implementations, this package leverages `xarray` and `dask` to:
 
@@ -14,14 +14,14 @@ This tool is designed to process **large-scale oceanographic datasets** (global 
 2.  **Parallelize** computations to handle memory-intensive files (e.g., GLORYS, OISST).
 3.  **Detect** MHW or MCS events in 3D (Surface) or 4D (Volumetric) arrays.
 
-## 🚀 Features
+## Features
 
 - **Standard Compliance:** Implements the Hobday et al. (2016) baseline.
 - **Volumetric Analysis:** Capable of detecting subsurface heatwaves if depth data is provided.
 - **Robustness:** Automatically handles leap years, missing data (NaNs), and land masks.
 - **Efficiency:** Uses `xr.apply_ufunc` for optimized compiled execution.
 
-## 🛠 Installation
+## Installation
 
 Install the dependencies:
 
@@ -41,7 +41,7 @@ The script expects a NetCDF file with the following characteristics:
 | :-------------- | :--------------------------------------------------- | :------ |
 | **Temperature** | Sea Surface Temperature (SST)/Potential Temperature. | °C or K |
 
-## 🖥 Usage
+## Usage
 
 To integrate the **xrMHW** detector into your oceanographic analysis workflow, follow these steps:
 
@@ -66,7 +66,7 @@ CLIM_START = 1993
 CLIM_END = 2022
 ```
 
-## 📊 Output Specifications
+## Output Specifications
 
 The output is a NetCDF file containing the computed MHW metrics. The data is masked: grid points without an active MHW event are filled with NaN.
 
@@ -80,7 +80,7 @@ The output is a NetCDF file containing the computed MHW metrics. The data is mas
 
 Also include the climatology and threshold
 
-## 🔬 Methodology
+## Methodology
 
 ### Scientific Definition
 
@@ -98,11 +98,11 @@ The algorithm implements the standard hierarchical definition by **Hobday et al.
 - **Wrapper:** `xarray.apply_ufunc` maps this 1D function across the **Time** dimension of the N-dimensional input array, effectively looping over `Lat`, `Lon`, and `Depth` in C-speed (vectorized).
 - **Chunking:** The workflow relies on `Dask` chunking to process datasets significantly larger than the available RAM by streaming blocks of spatial data.
 
-## 📄 License
+## License
 
 Distributed under the GPL-3.0 license. See LICENSE for more information.
 
-## 📚 References
+## References
 
 Hobday, A. J., et al. (2016). A hierarchical approach to defining marine heatwaves. Progress in Oceanography, 141, 227-238. DOI: 10.1016/j.pocean.2015.12.014
 
