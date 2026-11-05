@@ -1,0 +1,5 @@
+phase,ref_side,timesteps,tool,dask_scheduler,threads,cells,seconds,cell_steps_per_s,threshold_s,detect_s
+reference,16,12017,xrMHW (in-memory),none,1,256,1.2822173000313342,2399243.872255367,,
+reference,16,12017,marineHeatWaves (cell by cell),none,1,256,20.024361700052395,153630.46503459587,,
+reference,16,12017,"xmhw [grid, synchronous]",synchronous,1,256,120.06765890005045,25621.820465083685,108.83531570015475,11.232343199895695
+reference,16,12017,"xmhw [grid, threads]",threads,14,256,144.7699776000809,21249.930759112594,130.5859348999802,14.18404270010069
