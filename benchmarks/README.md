@@ -12,6 +12,7 @@ paper.
 | `fig_performance.png` | Figure 1 of the 22-Sep-2026 draft (`make_fig_performance.py` also writes a PDF). |
 | `benchmark_xrMHW_v3_3.py` | Revised benchmark: three-pass timing, a fair xmhw comparison, a separate scratch folder (see below). Same phases and options as v3_2. |
 | `bench_storage.py` | Storage cost of the severity field under several writers with identical chunks. |
+| `make_fig_performance_v3.py` | Figure 1 from a mix of `bench_v2*` and `bench_v3*` CSV files, with the full-domain markers labelled by peak memory or by time. |
 | `bench_v3/` | Results of `benchmark_xrMHW_v3_3.py` with threads (ceiling) and of the reference phase, plus the storage benchmark. |
 | `bench_v3_proc/` | Results of `benchmark_xrMHW_v3_3.py` with worker processes (ceiling). |
 
@@ -74,6 +75,9 @@ python benchmark_xrMHW_v3_3.py --input GLORYS_GrandBanks_1993_2025.nc --var thet
 
 python bench_storage.py --input GLORYS_GrandBanks_1993_2025.nc --var thetao \
     --clim 1993 2022 --workers 14 --chunk-side 8 --outdir <scratch>
+
+python make_fig_performance_v3.py --labels memory
+python make_fig_performance_v3.py --labels time
 ```
 
 Run `python <script> --help` for every option. For the reference phase, `xmhw` must
