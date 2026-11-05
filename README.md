@@ -223,6 +223,37 @@ heatwave run and a cold spell run over the same data can be merged without colli
 `"cum_intensity"`, `"clim"`/`"climatology"`, `"thresh"`/`"threshold"`), as a string or a
 sequence. Unknown names raise `ValueError` listing the valid ones.
 
+## Writing results efficiently
+
+Every output has the size of the input grid, and the event fields are NaN outside
+events, so a 4-D result written naively is large and mostly empty.
+
+```python
+import xrMHW
+
+out = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), output_vars=["severity", "category"])
+
+# netCDF-4 with compression: event fields are NaN outside events and compress well
+enc = {v: {"zlib": True, "complevel": 1} for v in out.data_vars}
+out.to_netcdf("mhw_severity.nc", encoding=enc)
+
+# or Zarr (compressed by default; one file per chunk, works with worker processes)
+out.to_zarr("mhw_severity.zarr", mode="w")
+```
+
+- **Write only the fields you need.** `output_vars` limits what is computed and
+  written; each field you leave out saves a full-grid array.
+- **Compress.** Written uncompressed, the output can be about 15 times
+  larger: for the severity field over the Grand Banks benchmark domain (see
+  [`benchmarks/`](benchmarks/)), uncompressed netCDF took 17.2 GiB and Zarr
+  1.13 GiB.
+- **With `dask.distributed` worker processes, prefer Zarr.** Writing a large netCDF file
+  from worker processes reopens the file for every chunk under a lock, and in our
+  benchmarks it failed after about 5 GB; Zarr writes each chunk independently.
+- **Keep the time axis in one chunk.** The climatology and the event detection use each
+  cell's complete record. A time axis split into several chunks is rechunked to one
+  chunk, with a warning; chunk over the spatial dimensions to control memory.
+
 ## Parameters
 
 All of the following are passed as keyword arguments to `xrMHW_func`.

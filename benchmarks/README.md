@@ -11,7 +11,8 @@ paper.
 | `bench_v2_proc/` | 22-Sep-2026 results with a `LocalCluster` of worker processes (one thread each). |
 | `fig_performance.png` | Figure 1 of the 22-Sep-2026 draft (`make_fig_performance.py` also writes a PDF). |
 | `benchmark_xrMHW_v3_3.py` | Revised benchmark: three-pass timing, a fair xmhw comparison, a separate scratch folder (see below). Same phases and options as v3_2. |
-| `bench_v3/` | Results of `benchmark_xrMHW_v3_3.py` with threads (ceiling) and of the reference phase. |
+| `bench_storage.py` | Storage cost of the severity field under several writers with identical chunks. |
+| `bench_v3/` | Results of `benchmark_xrMHW_v3_3.py` with threads (ceiling) and of the reference phase, plus the storage benchmark. |
 | `bench_v3_proc/` | Results of `benchmark_xrMHW_v3_3.py` with worker processes (ceiling). |
 
 ## Setup used for the paper
@@ -70,6 +71,9 @@ python benchmark_xrMHW_v3_3.py --input GLORYS_GrandBanks_1993_2025.nc --var thet
 python benchmark_xrMHW_v3_3.py --input GLORYS_GrandBanks_1993_2025.nc --var thetao \
     --clim 1993 2022 --phase ceiling --ceiling-workers 14 --chunk-side 8 \
     --write-format zarr --outdir bench_v3_proc --scratch <scratch>
+
+python bench_storage.py --input GLORYS_GrandBanks_1993_2025.nc --var thetao \
+    --clim 1993 2022 --workers 14 --chunk-side 8 --outdir <scratch>
 ```
 
 Run `python <script> --help` for every option. For the reference phase, `xmhw` must
@@ -103,6 +107,18 @@ reconnecting the drive, or rebooting, empties the cache.
 
 Both schedulers write Zarr in the revised ceiling runs, so the two full-domain
 results are measured the same way.
+
+## Storage (`bench_storage.py`)
+
+The draft compared Zarr and uncompressed netCDF from two different runs, which mixed
+up the container format with compression. `bench_storage.py` computes the severity
+field once (worker processes, written to a source Zarr store) and then writes the
+same field, with the same chunks, as uncompressed netCDF-4, netCDF-4 with zlib level
+1, and Zarr with its default compressor (optionally also an explicit Zstd level). It
+records size and write time for each, the codec Zarr used, and the fraction of ocean
+cell-days inside events, which explains the compression ratio. Each copy is deleted
+after it is measured unless `--keep` is given; the full domain needs about 20 GiB
+free in `--outdir`.
 
 ## Reading the results
 
