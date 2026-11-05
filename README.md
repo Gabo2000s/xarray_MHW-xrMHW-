@@ -114,8 +114,8 @@ import xarray as xr
 import xrMHW
 
 # Detection needs the complete time series for each cell, so chunk over space
-# and keep time whole. Chunking over time is the most common mistake: xrMHW then
-# stops with a ValueError asking for a single chunk along time.
+# and keep time whole. If time is split into several chunks, xrMHW rechunks it
+# to a single chunk and warns; chunk over space to keep memory under control.
 ds = xr.open_dataset(
     "GLORYS12V1_thetao_1993-2022.nc",
     chunks={"time": -1, "latitude": 50, "longitude": 50},

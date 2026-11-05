@@ -587,6 +587,8 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None, **kwargs):
     ds : xr.Dataset
         Input dataset with a temperature variable and a 'time' coordinate.
         Chunk so that time is contiguous, e.g. ``chunks={'time': -1}``.
+        If the time axis is split into several chunks, it is rechunked to a
+        single chunk with a warning.
     temp_var_name : str
         Name of the temperature variable in `ds`.
     clim_period : tuple of (int, int)
@@ -642,6 +644,25 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None, **kwargs):
     if temp_var_name not in ds:
         raise KeyError(f"Variable '{temp_var_name}' not found in the dataset. "
                        f"Available: {list(ds.data_vars)}")
+
+    # The climatology and the event detection use each cell's complete record,
+    # so apply_ufunc needs the whole time axis in one chunk; without this it
+    # raises a ValueError that does not say what to do.
+    da = ds[temp_var_name]
+    if da.chunks is not None and 'time' in da.dims:
+        t_axis = da.get_axis_num('time')
+        if len(da.chunks[t_axis]) > 1:
+            other = [max(c) for i, c in enumerate(da.chunks) if i != t_axis]
+            new_mib = (da.sizes['time'] * int(np.prod(other))
+                       * np.dtype(da.dtype).itemsize / 2 ** 20)
+            warnings.warn(
+                "xrMHW needs the whole time axis in one chunk (the climatology "
+                "and the event detection use each cell's complete record); "
+                f"rechunking with chunks={{'time': -1}} (~{new_mib:.0f} MiB per "
+                "chunk). To control memory, chunk the input yourself, e.g. "
+                "ds.chunk({'time': -1, 'latitude': 10, 'longitude': 10}).",
+                UserWarning, stacklevel=2)
+            ds = ds.chunk({'time': -1})
 
     time_index = ds.indexes['time']
     try:
