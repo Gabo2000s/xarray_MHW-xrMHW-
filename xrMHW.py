@@ -50,7 +50,7 @@ import xarray as xr
 __version__ = "3.0.0"
 
 __all__ = ["detect_mhw_core", "mhw_1d_wrapper", "xrMHW_func", "xrMHW_clim",
-           "xrMHW_events", "xrMHW_doy"]
+           "xrMHW_events", "xrMHW_doy", "xrMHW_detrend"]
 
 # Number of days on the 366-day (leap-year) day-of-year grid.
 _NDOY = 366
@@ -533,25 +533,139 @@ def _clim_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year,
         pctile, window_half_width, smooth_pctile, smooth_width)
 
 
-def _events_1d_wrapper(time_ordinal, temp, seas, thresh, by_doy=True,
-                       max_gap_interp=2, **kwargs):
-    """Events of one cell against a given climatology and threshold.
+_DAYS_PER_DECADE = 3652.5
 
-    `seas` and `thresh` are either on the 366-day grid (``by_doy=True``) or
-    given per time step. Same NaN handling as `mhw_1d_wrapper`.
+
+def _expand_clim(time_ordinal, seas, thresh, coef=None, layout='doy',
+                 period_starts=None, t0=0.0, offset_to='both'):
+    """Climatology and threshold of one cell at every time step.
+
+    layout 'doy': (366,) arrays indexed by day of year; 'period': (n, 366)
+    arrays, one row per period starting in `period_starts`; 'time': already
+    one value per time step. `coef` adds a polynomial offset in decades since
+    `t0` (detrended and adaptation-adjusted baselines), to both fields or only
+    to the threshold.
     """
+    if layout == 'time':
+        seas_t, thresh_t = np.asarray(seas, float), np.asarray(thresh, float)
+    else:
+        year, doy = _time_metadata(time_ordinal)
+        if layout == 'period':
+            row = np.searchsorted(np.asarray(period_starts), year, side='right') - 1
+            seas_t, thresh_t = seas[row, doy - 1], thresh[row, doy - 1]
+        else:
+            seas_t, thresh_t = seas[doy - 1], thresh[doy - 1]
+        seas_t, thresh_t = np.asarray(seas_t, float), np.asarray(thresh_t, float)
+    if coef is not None:
+        offset = np.polyval(np.asarray(coef, float),
+                            (time_ordinal - t0) / _DAYS_PER_DECADE)
+        thresh_t = thresh_t + offset
+        if offset_to == 'both':
+            seas_t = seas_t + offset
+    return seas_t, thresh_t
+
+
+def _events_1d_wrapper(time_ordinal, temp, seas, thresh, *coef, layout='doy',
+                       period_starts=None, t0=0.0, offset_to='both',
+                       max_gap_interp=2, **kwargs):
+    """Events of one cell against a given climatology and threshold (any layout
+    of `_expand_clim`). Same NaN handling as `mhw_1d_wrapper`."""
     T = len(time_ordinal)
     temp = temp.copy()
     if np.isnan(temp).all():
         return _nan_outputs(T)
     _fill_short_gaps(temp, max_gap_interp)
-    if by_doy:
-        _, doy = _time_metadata(time_ordinal.astype(int))
-        seas_t, thresh_t = seas[doy - 1], thresh[doy - 1]
-    else:
-        seas_t, thresh_t = seas, thresh
-    return _events_1d(temp.astype(float), np.asarray(seas_t, dtype=float),
-                      np.asarray(thresh_t, dtype=float), **kwargs)
+    seas_t, thresh_t = _expand_clim(
+        time_ordinal.astype(int), seas, thresh, coef[0] if coef else None,
+        layout, period_starts, t0, offset_to)
+    return _events_1d(temp.astype(float), seas_t, thresh_t, **kwargs)
+
+
+def _trend_1d(t_ordinal, temp, year, doy, clim_period, degree, t0,
+              window_half_width, smooth_width, smooth_pctile):
+    """Polynomial trend of the anomaly of one series, in decades since `t0`.
+
+    The anomaly is taken from the fixed climatology of the raw series over
+    `clim_period`; the trend is fitted over the whole record and shifted to
+    have zero mean over `clim_period`, so removing it leaves the reference
+    period at its observed level (Smith et al. 2025, Fig. 4).
+    Returns (coef, offset per time step).
+    """
+    seas, _ = _climatology_1d(year, doy, temp, clim_period, 50,
+                              window_half_width, smooth_pctile, smooth_width)
+    x = (t_ordinal - t0) / _DAYS_PER_DECADE
+    anom = temp - seas[doy - 1]
+    ok = np.isfinite(anom)
+    if ok.sum() <= degree:
+        coef = np.full(degree + 1, np.nan)
+        return coef, np.full(len(temp), np.nan)
+    coef = np.polyfit(x[ok], anom[ok], degree)
+    in_ref = (year >= clim_period[0]) & (year <= clim_period[1])
+    coef[-1] -= np.polyval(coef, x[in_ref]).mean()
+    return coef, np.polyval(coef, x)
+
+
+def _detrended_clim_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year,
+                               degree=1, t0=0.0, max_gap_interp=2, pctile=90,
+                               window_half_width=5, smooth_pctile=True,
+                               smooth_width=31):
+    """Fixed climatology of the detrended series, and the trend coefficients."""
+    temp = temp.copy()
+    if np.isnan(temp).all():
+        return np.full(_NDOY, np.nan), np.full(_NDOY, np.nan), np.full(degree + 1, np.nan)
+    _fill_short_gaps(temp, max_gap_interp)
+    t_ordinal = time_ordinal.astype(int)
+    year, doy = _time_metadata(t_ordinal)
+    temp = temp.astype(float)
+    period = (int(clim_start_year), int(clim_end_year))
+    coef, offset = _trend_1d(t_ordinal, temp, year, doy, period, degree, t0,
+                             window_half_width, smooth_width, smooth_pctile)
+    seas, thresh = _climatology_1d(year, doy, temp - offset, period, pctile,
+                                   window_half_width, smooth_pctile, smooth_width)
+    return seas, thresh, coef
+
+
+def _trend_coef_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year,
+                           degree=1, t0=0.0, max_gap_interp=2, window_half_width=5,
+                           smooth_pctile=True, smooth_width=31):
+    """Trend coefficients only (for `xrMHW_detrend`)."""
+    temp = temp.copy()
+    if np.isnan(temp).all():
+        return np.full(degree + 1, np.nan)
+    _fill_short_gaps(temp, max_gap_interp)
+    t_ordinal = time_ordinal.astype(int)
+    year, doy = _time_metadata(t_ordinal)
+    coef, _ = _trend_1d(t_ordinal, temp.astype(float), year, doy,
+                        (int(clim_start_year), int(clim_end_year)), degree, t0,
+                        window_half_width, smooth_width, smooth_pctile)
+    return coef
+
+
+def _polyval_1d(time_ordinal, coef, t0=0.0):
+    return np.polyval(coef, (time_ordinal.astype(float) - t0) / _DAYS_PER_DECADE)
+
+
+def _periodic_clim_1d_wrapper(time_ordinal, temp, windows=(), max_gap_interp=2,
+                              pctile=90, window_half_width=5, smooth_pctile=True,
+                              smooth_width=31):
+    """One fixed climatology per period; `windows` holds each period's baseline
+    years. Identical windows are computed once."""
+    n = len(windows)
+    temp = temp.copy()
+    if np.isnan(temp).all():
+        return np.full((n, _NDOY), np.nan), np.full((n, _NDOY), np.nan)
+    _fill_short_gaps(temp, max_gap_interp)
+    year, doy = _time_metadata(time_ordinal.astype(int))
+    temp = temp.astype(float)
+    seas, thresh = np.empty((n, _NDOY)), np.empty((n, _NDOY))
+    done = {}
+    for i, w in enumerate(windows):
+        w = (int(w[0]), int(w[1]))
+        if w not in done:
+            done[w] = _climatology_1d(year, doy, temp, w, pctile, window_half_width,
+                                      smooth_pctile, smooth_width)
+        seas[i], thresh[i] = done[w]
+    return seas, thresh
 
 
 # =============================================================================
@@ -725,7 +839,8 @@ def _assemble_outputs(results, ds, prefix, selected):
     return ds_out
 
 
-def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None, **kwargs):
+def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None,
+               baseline='fixed', **kwargs):
     """
     Detect marine heatwaves (or cold spells) over an entire xarray Dataset,
     parallelised with Dask.
@@ -769,6 +884,11 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None, **kwargs):
           normal conditions.
         * **join_method** ({'post-filter', 'pre-filter'}, default
           'post-filter') — order of joining relative to the duration filter.
+    baseline : {'fixed', 'detrended', 'adaptation', 'periodic'}
+        Default 'fixed'. Any other baseline (Smith et al. 2025) runs
+        `xrMHW_clim` and `xrMHW_events` in turn; its options (``trend``,
+        ``degree``, ``rate``, ``ref_length``, ``update_every``) go in
+        `kwargs`. See `xrMHW_clim`.
 
     Returns
     -------
@@ -792,6 +912,22 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None, **kwargs):
     exceedance in each individual cell, not the lifetime of a coherent 3-D
     structure; object-level tracking is out of scope for this package.
     """
+    if baseline != 'fixed':
+        if baseline not in _BASELINES:
+            raise ValueError(f"baseline must be one of {sorted(_BASELINES)}, "
+                             f"not {baseline!r}.")
+        clim_keys = set(_CLIM_DEFAULTS) | set(_BASELINES[baseline]) | {'cold_spells'}
+        clim_kw = {k: v for k, v in kwargs.items() if k in clim_keys}
+        event_kw = {k: v for k, v in kwargs.items() if k not in clim_keys}
+        if 'max_gap_interp' in clim_kw:
+            event_kw['max_gap_interp'] = clim_kw['max_gap_interp']
+        clim = xrMHW_clim(ds, temp_var_name, clim_period, baseline=baseline, **clim_kw)
+        prefix = 'mcs' if clim_kw.get('cold_spells') else 'mhw'
+        return xrMHW_events(ds, temp_var_name, clim,
+                            output_vars=(_canonical_outputs(prefix)
+                                         if output_vars is None else output_vars),
+                            **event_kw)
+
     ds = _prepare_input(ds, temp_var_name)
     time_ordinal_da = _time_ordinal_da(ds)
 
@@ -846,6 +982,13 @@ _CLIM_DEFAULTS = dict(pctile=None, window_half_width=5, smooth_pctile=True,
                       smooth_width=31, max_gap_interp=2)
 _EVENT_DEFAULTS = dict(min_duration=5, join_across_gaps=True, max_gap=2,
                        join_method='post-filter')
+# Baselines of Smith et al. (2025) and their own parameters (defaults).
+_BASELINES = {
+    'fixed': {},
+    'detrended': {'trend': 'linear', 'degree': None},
+    'adaptation': {'rate': None},
+    'periodic': {'ref_length': 30, 'update_every': 10},
+}
 
 
 def _check_kwargs(kwargs, allowed, func):
@@ -888,16 +1031,54 @@ def xrMHW_doy(time):
     return da
 
 
-def xrMHW_clim(ds, temp_var_name, clim_period, cold_spells=False, **kwargs):
+def _centre_ordinal(start_year, end_year):
+    return 0.5 * (date(int(start_year), 1, 1).toordinal()
+                  + date(int(end_year), 12, 31).toordinal())
+
+
+def _trend_degree(trend, degree):
+    if trend == 'linear':
+        if degree not in (None, 1):
+            raise ValueError("trend='linear' has degree 1; use "
+                             "trend='polynomial' for another degree.")
+        return 1
+    if trend == 'polynomial':
+        if degree is None or int(degree) < 1:
+            raise ValueError("trend='polynomial' needs degree >= 1, e.g. degree=3.")
+        return int(degree)
+    raise ValueError(f"trend must be 'linear' or 'polynomial', not {trend!r}.")
+
+
+def _periodic_windows(years, ref_length, update_every):
+    """Period start years and the baseline of each period (WMO practice: the
+    reference period is the `ref_length` years before the period). A period
+    whose baseline starts before the record uses the first complete window."""
+    y0, y1 = int(years.min()), int(years.max())
+    if y1 - y0 + 1 < ref_length:
+        raise ValueError(f"The record ({y0}-{y1}) is shorter than ref_length="
+                         f"{ref_length} years.")
+    first = y0 - ((y0 - 1) % update_every)          # e.g. 1991, 2001, ... for 10
+    starts = list(range(first, y1 + 1, update_every))
+    windows, approx = [], []
+    for s in starts:
+        w = (s - ref_length, s - 1)
+        if w[0] < y0:
+            w = (y0, y0 + ref_length - 1)
+            approx.append(s)
+        windows.append(w)
+    return starts, windows, approx
+
+
+def xrMHW_clim(ds, temp_var_name, clim_period=None, cold_spells=False,
+               baseline='fixed', **kwargs):
     """
-    Seasonal climatology and percentile threshold over a fixed baseline,
-    without detecting events.
+    Seasonal climatology and percentile threshold, without detecting events.
 
     This is the first half of `xrMHW_func`, on its own. Its output can be
     stored, inspected, reused for several detections, or applied to another
-    dataset or period with `xrMHW_events`. ``xrMHW_events(ds, var,
-    xrMHW_clim(ds, var, clim_period))`` gives exactly the same events as
-    ``xrMHW_func(ds, var, clim_period)``.
+    dataset or period with `xrMHW_events`. With the fixed baseline,
+    ``xrMHW_events(ds, var, xrMHW_clim(ds, var, clim_period))`` gives exactly
+    the same events as ``xrMHW_func(ds, var, clim_period)``.
 
     Parameters
     ----------
@@ -906,10 +1087,30 @@ def xrMHW_clim(ds, temp_var_name, clim_period, cold_spells=False, **kwargs):
     temp_var_name : str
         Name of the temperature variable in `ds`.
     clim_period : tuple of (int, int)
-        Start and end years (inclusive) of the baseline, e.g. ``(1991, 2020)``.
+        Start and end years (inclusive) of the reference period, e.g.
+        ``(1991, 2020)``. Required, except for ``baseline='periodic'``.
     cold_spells : bool, default False
         Compute the threshold for marine cold spells (10th percentile by
         default) instead of heatwaves (90th).
+    baseline : {'fixed', 'detrended', 'adaptation', 'periodic'}
+        How the threshold relates to time (Smith et al. 2025, Prog. Oceanogr.
+        231, 103404):
+
+        * ``'fixed'`` (default) — one reference period for the whole record.
+        * ``'detrended'`` — the long-term trend of the anomaly is fitted over
+          the whole record and removed before the fixed climatology is
+          computed; climatology and threshold then follow the trend. Options
+          ``trend='linear'`` (default) or ``'polynomial'`` with ``degree``.
+          A wrong trend shape gives spurious events (Smith et al., Box 1).
+        * ``'adaptation'`` — fixed threshold rising at ``rate`` degC per
+          decade from the centre of the reference period, for an organism
+          adapting at that rate. Only the threshold moves; the climatology
+          stays fixed.
+        * ``'periodic'`` — the reference period is the ``ref_length`` years
+          (default 30) before each period of ``update_every`` years (default
+          10), as recommended by the WMO: e.g. 2021-2030 uses 1991-2020.
+          Periods without a complete reference period before them use the
+          first complete one in the record, with a warning.
     **kwargs
         * **pctile** (int/float, default 90, or 10 for cold spells).
         * **window_half_width** (int, default 5) — the window is ``2*w + 1`` days.
@@ -917,44 +1118,116 @@ def xrMHW_clim(ds, temp_var_name, clim_period, cold_spells=False, **kwargs):
           (int, default 31) — smoothing of climatology and threshold.
         * **max_gap_interp** (int, default 2) — longest run of missing values
           filled by interpolation before the climatology is computed.
+        * the options of the chosen baseline, listed above.
 
     Returns
     -------
     xr.Dataset
         ``climatology`` and ``mhw_threshold`` (``mcs_threshold`` for cold
         spells), float64, with a ``doy`` dimension of length 366 (see
-        `xrMHW_doy`) in place of ``time``. The attributes record the baseline
-        and every parameter; `xrMHW_events` reads them.
+        `xrMHW_doy`) in place of ``time`` (plus ``period`` for the periodic
+        baseline, and ``offset_coef`` for the detrended and adaptation ones).
+        The attributes record the baseline and every parameter;
+        `xrMHW_events` reads them.
     """
-    _check_kwargs(kwargs, _CLIM_DEFAULTS, 'xrMHW_clim')
+    if baseline not in _BASELINES:
+        raise ValueError(f"baseline must be one of {sorted(_BASELINES)}, "
+                         f"not {baseline!r}.")
+    _check_kwargs(kwargs, set(_CLIM_DEFAULTS) | set(_BASELINES[baseline]),
+                  'xrMHW_clim')
+    opts = {k: kwargs.pop(k, v) for k, v in _BASELINES[baseline].items()}
     params = dict(_CLIM_DEFAULTS, **kwargs)
     if params['pctile'] is None:
         params['pctile'] = 10 if cold_spells else 90
+    if baseline != 'periodic' and clim_period is None:
+        raise ValueError(f"baseline={baseline!r} needs clim_period=(start, end).")
     prefix = 'mcs' if cold_spells else 'mhw'
 
     ds = _prepare_input(ds, temp_var_name)
     time_ordinal_da = _time_ordinal_da(ds)
+    da = ds[temp_var_name]
+    common = dict(input_core_dims=[['time'], ['time']], vectorize=True,
+                  dask='parallelized')
+    attrs = {'xrMHW_baseline': baseline}
+    coef = None
 
-    seas, thresh = xr.apply_ufunc(
-        _clim_1d_wrapper,
-        time_ordinal_da,
-        ds[temp_var_name],
-        kwargs={'clim_start_year': clim_period[0],
-                'clim_end_year': clim_period[1], **params},
-        input_core_dims=[['time'], ['time']],
-        output_core_dims=[['doy'], ['doy']],
-        vectorize=True,
-        dask='parallelized',
-        output_dtypes=[np.float64, np.float64],
-        dask_gufunc_kwargs={'output_sizes': {'doy': _NDOY}},
-    )
+    if baseline in ('fixed', 'adaptation'):
+        seas, thresh = xr.apply_ufunc(
+            _clim_1d_wrapper, time_ordinal_da, da,
+            kwargs={'clim_start_year': clim_period[0],
+                    'clim_end_year': clim_period[1], **params},
+            output_core_dims=[['doy'], ['doy']],
+            output_dtypes=[np.float64, np.float64],
+            dask_gufunc_kwargs={'output_sizes': {'doy': _NDOY}}, **common)
+        if baseline == 'adaptation':
+            if opts['rate'] is None:
+                raise ValueError("baseline='adaptation' needs rate=<degC per decade>.")
+            t0 = _centre_ordinal(*clim_period)
+            rate = float(opts['rate'])
+            coef = xr.DataArray(np.array([rate, 0.0]), dims='coef')
+            coef = coef.broadcast_like(seas.isel(doy=0, drop=True)).copy()
+            attrs.update(xrMHW_offset_t0=t0, xrMHW_offset_to='threshold',
+                         xrMHW_rate_per_decade=rate,
+                         xrMHW_t_ref=(str(date.fromordinal(int(t0)))
+                                      + (' 12:00' if t0 % 1 else '')))
+
+    elif baseline == 'detrended':
+        degree = _trend_degree(opts['trend'], opts['degree'])
+        t_ord = time_ordinal_da.values
+        t0 = 0.5 * (float(t_ord[0]) + float(t_ord[-1]))
+        seas, thresh, coef = xr.apply_ufunc(
+            _detrended_clim_1d_wrapper, time_ordinal_da, da,
+            kwargs={'clim_start_year': clim_period[0],
+                    'clim_end_year': clim_period[1], 'degree': degree, 't0': t0,
+                    **params},
+            output_core_dims=[['doy'], ['doy'], ['coef']],
+            output_dtypes=[np.float64] * 3,
+            dask_gufunc_kwargs={'output_sizes': {'doy': _NDOY, 'coef': degree + 1}},
+            **common)
+        attrs.update(xrMHW_offset_t0=t0, xrMHW_offset_to='both',
+                     xrMHW_trend=opts['trend'], xrMHW_trend_degree=degree)
+
+    else:  # periodic
+        years = ds.indexes['time'].year
+        starts, windows, approx = _periodic_windows(
+            np.asarray(years), int(opts['ref_length']), int(opts['update_every']))
+        if approx:
+            warnings.warn(
+                f"No complete {opts['ref_length']}-year reference period before "
+                f"the periods starting in {approx}; they use the first complete "
+                f"one, {windows[starts.index(approx[0])]}, which makes them a "
+                "fixed baseline (an approximation).", UserWarning, stacklevel=2)
+        seas, thresh = xr.apply_ufunc(
+            _periodic_clim_1d_wrapper, time_ordinal_da, da,
+            kwargs={'windows': tuple(windows), **params},
+            output_core_dims=[['period', 'doy'], ['period', 'doy']],
+            output_dtypes=[np.float64, np.float64],
+            dask_gufunc_kwargs={'output_sizes': {'period': len(starts),
+                                                 'doy': _NDOY}}, **common)
+        seas = seas.assign_coords(period=np.asarray(starts, dtype=np.int32))
+        thresh = thresh.assign_coords(period=np.asarray(starts, dtype=np.int32))
+        attrs.update(xrMHW_ref_length=int(opts['ref_length']),
+                     xrMHW_update_every=int(opts['update_every']),
+                     xrMHW_period_baselines=str(dict(zip(starts, windows))))
 
     out = xr.Dataset({'climatology': seas, f'{prefix}_threshold': thresh})
+    if coef is not None:
+        out['offset_coef'] = coef
+        out['offset_coef'].attrs.update(
+            long_name='polynomial offset coefficients',
+            units='degC per decade**k (highest power first)',
+            description='Offset added at each date to the threshold (and, '
+            "when xrMHW_offset_to == 'both', to the climatology): "
+            'numpy.polyval(offset_coef, (t - xrMHW_offset_t0) / 3652.5), '
+            't in ordinal days.')
     out = out.assign_coords(doy=np.arange(1, _NDOY + 1, dtype=np.int16))
     out['doy'].attrs.update(long_name='day of year on a 366-day (leap-year) grid',
                             units='1',
                             description='29 February is day 60; 1 March is '
                             'always day 61 (see xrMHW_doy).')
+    if 'period' in out.dims:
+        out['period'].attrs.update(long_name='first year of the period',
+                                   units='year')
     for name, key in (('climatology', 'climatology'),
                       (f'{prefix}_threshold', 'threshold')):
         long_name, units, description = _VAR_ATTRS[key]
@@ -963,9 +1236,10 @@ def xrMHW_clim(ds, temp_var_name, clim_period, cold_spells=False, **kwargs):
     # Keep the coordinates that do not depend on time (lat, lon, depth, ...).
     out = out.assign_coords({k: v for k, v in ds.coords.items()
                              if 'time' not in v.dims and k not in out.coords})
+    out.attrs.update(attrs)
     out.attrs.update({
-        'xrMHW_baseline': 'fixed',
-        'xrMHW_clim_period': str(tuple(clim_period)),
+        'xrMHW_clim_period': (str(tuple(clim_period)) if clim_period is not None
+                              else 'per period, see xrMHW_period_baselines'),
         'xrMHW_pctile': params['pctile'],
         'xrMHW_window_half_width': params['window_half_width'],
         'xrMHW_smooth_pctile': int(bool(params['smooth_pctile'])),
@@ -977,8 +1251,63 @@ def xrMHW_clim(ds, temp_var_name, clim_period, cold_spells=False, **kwargs):
     return out
 
 
+def xrMHW_detrend(ds, temp_var_name, clim_period, trend='linear', degree=None,
+                  **kwargs):
+    """
+    Remove the long-term trend from a temperature field, cell by cell.
+
+    The trend is a polynomial fitted over the whole record to the anomaly from
+    the fixed climatology of `clim_period`, and shifted to have zero mean over
+    `clim_period`, so the reference period keeps its observed level (as in
+    Smith et al. 2025, Fig. 4). ``baseline='detrended'`` in `xrMHW_clim` uses
+    the same trend; detecting events in the returned field against a fixed
+    climatology gives the same events.
+
+    Parameters
+    ----------
+    ds, temp_var_name, clim_period : as in `xrMHW_clim`
+    trend : {'linear', 'polynomial'}, default 'linear'
+    degree : int, required for ``trend='polynomial'``
+    **kwargs
+        **window_half_width**, **smooth_pctile**, **smooth_width** and
+        **max_gap_interp**, for the climatology used to form the anomaly.
+
+    Returns
+    -------
+    xr.Dataset
+        The detrended temperature (lazy if `ds` is) and ``trend_coef``,
+        the polynomial coefficients in degC per decade**k.
+    """
+    allowed = {'window_half_width', 'smooth_pctile', 'smooth_width', 'max_gap_interp'}
+    _check_kwargs(kwargs, allowed, 'xrMHW_detrend')
+    params = {k: v for k, v in _CLIM_DEFAULTS.items() if k in allowed}
+    params.update(kwargs)
+    degree = _trend_degree(trend, degree)
+    ds = _prepare_input(ds, temp_var_name)
+    tord = _time_ordinal_da(ds)
+    t0 = 0.5 * (float(tord.values[0]) + float(tord.values[-1]))
+    coef = xr.apply_ufunc(
+        _trend_coef_1d_wrapper, tord, ds[temp_var_name],
+        kwargs={'clim_start_year': clim_period[0], 'clim_end_year': clim_period[1],
+                'degree': degree, 't0': t0, **params},
+        input_core_dims=[['time'], ['time']], output_core_dims=[['coef']],
+        vectorize=True, dask='parallelized', output_dtypes=[np.float64],
+        dask_gufunc_kwargs={'output_sizes': {'coef': degree + 1}})
+    offset = xr.apply_ufunc(
+        _polyval_1d, tord, coef, kwargs={'t0': t0},
+        input_core_dims=[['time'], ['coef']], output_core_dims=[['time']],
+        vectorize=True, dask='parallelized', output_dtypes=[np.float64])
+    detrended = (ds[temp_var_name] - offset).transpose(*ds[temp_var_name].dims)
+    detrended.attrs = dict(ds[temp_var_name].attrs)
+    out = xr.Dataset({temp_var_name: detrended, 'trend_coef': coef})
+    out.attrs.update({'xrMHW_trend': trend, 'xrMHW_trend_degree': degree,
+                      'xrMHW_offset_t0': t0,
+                      'xrMHW_clim_period': str(tuple(clim_period))})
+    return out
+
+
 def _check_clim(clim, da):
-    """Validate a climatology for `xrMHW_events`; return (threshold name, core dim)."""
+    """Validate a climatology for `xrMHW_events`; return (threshold name, layout)."""
     if not isinstance(clim, xr.Dataset):
         raise TypeError("`clim` must be an xarray.Dataset, as returned by "
                         "xrMHW_clim, with 'climatology' and 'mhw_threshold' "
@@ -995,17 +1324,30 @@ def _check_clim(clim, da):
         raise ValueError("The climatology must vary along exactly one of 'doy' "
                          "(a seasonal cycle, as from xrMHW_clim) or 'time' "
                          f"(one value per date); it has dims {sorted(dims)}.")
-    core = core[0]
-    if core == 'doy' and clim.sizes['doy'] != _NDOY:
+    layout = core[0]
+    if layout == 'doy' and clim.sizes['doy'] != _NDOY:
         raise ValueError(f"'doy' must have length {_NDOY} (the 366-day grid of "
                          f"xrMHW_doy); it has {clim.sizes['doy']}.")
-    if core == 'time':
+    if 'period' in dims:
+        if layout != 'doy' or 'period' not in clim.coords:
+            raise ValueError("A climatology with a 'period' dimension needs 'doy' "
+                             "and a 'period' coordinate holding the first year "
+                             "of each period.")
+        years = da.indexes['time'].year if 'time' in da.indexes else None
+        if years is not None and int(years.min()) < int(clim['period'].min()):
+            raise ValueError("The first period starts after the first year of "
+                             "the temperature record.")
+        layout = 'period'
+    if 'offset_coef' in clim and layout == 'time':
+        raise ValueError("'offset_coef' only applies to a climatology on 'doy'.")
+    if layout == 'time':
         t_clim = clim['time'].values if 'time' in clim.coords else None
         if (clim.sizes['time'] != da.sizes['time']
                 or (t_clim is not None and not np.array_equal(t_clim, da['time'].values))):
             raise ValueError("A climatology given per date must have the same "
                              "'time' coordinate as the temperature.")
-    for d in dims - {core}:
+    grid_dims = dims | (set(clim['offset_coef'].dims) if 'offset_coef' in clim else set())
+    for d in grid_dims - {'doy', 'time', 'period', 'coef'}:
         if d not in da.dims:
             raise ValueError(f"The climatology has dimension '{d}', which the "
                              f"temperature does not have (its dims: {da.dims}).")
@@ -1016,7 +1358,7 @@ def _check_clim(clim, da):
                 clim[d].values, da[d].values):
             raise ValueError(f"Coordinate '{d}' differs between the climatology "
                              "and the temperature; they must be on the same grid.")
-    return thr, core
+    return thr, layout
 
 
 def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
@@ -1025,10 +1367,11 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
     threshold.
 
     This is the second half of `xrMHW_func`, on its own. The climatology can
-    come from `xrMHW_clim` on the same data (the result is then identical to
-    `xrMHW_func`), from another period or dataset, or be built by hand: any
-    threshold that varies with the day of year (dimension ``doy``, length 366,
-    see `xrMHW_doy`) or with the date (dimension ``time``, same as `ds`).
+    come from `xrMHW_clim` on the same data (with the fixed baseline the
+    result is then identical to `xrMHW_func`), from another period or dataset,
+    or be built by hand: any threshold that varies with the day of year
+    (dimension ``doy``, length 366, see `xrMHW_doy`) or with the date
+    (dimension ``time``, same as `ds`).
 
     Parameters
     ----------
@@ -1038,8 +1381,8 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
         Name of the temperature variable in `ds`.
     clim : xr.Dataset
         ``climatology`` and ``mhw_threshold`` (heatwaves) or ``mcs_threshold``
-        (cold spells), on the grid of `ds`. Which threshold is present decides
-        what is detected.
+        (cold spells), on the grid of `ds`, as returned by `xrMHW_clim` with
+        any baseline. Which threshold is present decides what is detected.
     output_vars : str or sequence of str, optional
         Which variables to return. ``None`` (default) returns the six event
         fields; ``'climatology'`` and ``'threshold'`` can be added, expanded
@@ -1057,12 +1400,13 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
     Returns
     -------
     xr.Dataset
-        The same event fields as `xrMHW_func`, on the input grid.
+        The same event fields as `xrMHW_func`, on the input grid. Intensity
+        and severity are measured from the climatology of the chosen baseline.
     """
     _check_kwargs(kwargs, set(_EVENT_DEFAULTS) | {'max_gap_interp'}, 'xrMHW_events')
     ds = _prepare_input(ds, temp_var_name)
     da = ds[temp_var_name]
-    thr_name, core = _check_clim(clim, da)
+    thr_name, layout = _check_clim(clim, da)
     cold_spells = thr_name == 'mcs_threshold'
     prefix = 'mcs' if cold_spells else 'mhw'
 
@@ -1077,23 +1421,29 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
     metric_names = {f'{prefix}_{f}' for f in _EVENT_METRIC_FIELDS}
 
     seas, thresh = clim['climatology'], clim[thr_name]
-    if core == 'time':
+    core = {'doy': ['doy'], 'period': ['period', 'doy'], 'time': ['time']}[layout]
+    if layout == 'time':
         seas = seas.assign_coords(time=da['time'])
         thresh = thresh.assign_coords(time=da['time'])
         if seas.chunks is not None:
             seas, thresh = seas.chunk({'time': -1}), thresh.chunk({'time': -1})
+    inputs = [_time_ordinal_da(ds), da, seas, thresh]
+    core_dims = [['time'], ['time'], core, core]
+    extra = dict(layout=layout)
+    if layout == 'period':
+        extra['period_starts'] = tuple(int(p) for p in clim['period'].values)
+    if 'offset_coef' in clim:
+        inputs.append(clim['offset_coef'])
+        core_dims.append(['coef'])
+        extra.update(t0=float(clim.attrs.get('xrMHW_offset_t0', 0.0)),
+                     offset_to=clim.attrs.get('xrMHW_offset_to', 'both'))
 
     results = xr.apply_ufunc(
-        _events_1d_wrapper,
-        _time_ordinal_da(ds),
-        da,
-        seas,
-        thresh,
-        kwargs=dict(by_doy=(core == 'doy'), max_gap_interp=int(max_gap_interp),
-                    cold_spells=cold_spells,
+        _events_1d_wrapper, *inputs,
+        kwargs=dict(max_gap_interp=int(max_gap_interp), cold_spells=cold_spells,
                     compute_event_metrics=bool(metric_names & set(selected)),
-                    **params),
-        input_core_dims=[['time'], ['time'], [core], [core]],
+                    **extra, **params),
+        input_core_dims=core_dims,
         output_core_dims=[['time']] * 9,
         vectorize=True,
         dask='parallelized',
@@ -1113,4 +1463,8 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
                                 '1-D time series; no spatial object tracking)'),
         'software': f'xrMHW v{__version__} (Hobday et al. 2016 definition)',
     })
+    for key in ('xrMHW_rate_per_decade', 'xrMHW_t_ref', 'xrMHW_trend',
+                'xrMHW_trend_degree', 'xrMHW_period_baselines'):
+        if key in clim.attrs:
+            ds_out.attrs['mhw_' + key[6:]] = clim.attrs[key]
     return ds_out

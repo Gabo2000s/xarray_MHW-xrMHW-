@@ -178,6 +178,28 @@ The threshold can also be built by hand, per day of year (`doy`, length 366, see
 detected. Running the two steps reads the data twice, so for a single analysis
 `xrMHW_func` is faster.
 
+**Baselines.** The baseline sets how the threshold relates to time, and it changes the
+results in a warming ocean (Smith et al. 2025, *Prog. Oceanogr.* 231, 103404).
+`xrMHW_clim` and `xrMHW_func` take `baseline=`:
+
+| `baseline` | Threshold | Options |
+|---|---|---|
+| `"fixed"` (default) | one reference period for the whole record | `clim_period` |
+| `"detrended"` | follows the long-term trend of the anomaly, fitted over the whole record | `trend="linear"` or `"polynomial"` with `degree` |
+| `"adaptation"` | fixed threshold rising at `rate` degC per decade from the centre of the reference period (the climatology stays fixed) | `rate` |
+| `"periodic"` | each period of `update_every` years (10) uses the `ref_length` years (30) before it, as recommended by the WMO | `ref_length`, `update_every` |
+
+```python
+detr = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), baseline="detrended")
+adapt = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), baseline="adaptation", rate=0.1)
+```
+
+A wrong trend shape gives spurious events: a linear trend removed from a warming that
+accelerates leaves too many events at both ends of the record (Smith et al., Box 1).
+`xrMHW.xrMHW_detrend` returns the detrended field itself. With the periodic baseline,
+periods without a complete reference period before them use the first complete one in
+the record, which makes them a fixed baseline; a warning says which.
+
 ## Example notebooks
 
 The [`examples/`](examples/) folder has six short notebooks that run on real data
