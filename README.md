@@ -206,6 +206,34 @@ cooler past (Smith et al., Box 1); `detrend_first=True` (the default) avoids it.
 shifting baseline computes one climatology per distinct window: with 60 years of data
 and a 30-year window, its climatology takes about 25 times as long as the fixed one.
 
+### Annual metrics
+
+`xrMHW_annual` turns the daily event fields into one value per cell and calendar year:
+the quantities of marineHeatWaves' `blockAverage` with one-year blocks. The result is
+small enough to keep in memory even when the detection was not.
+
+```python
+ann = xrMHW.xrMHW_annual(mhw)                          # year in place of time
+ann["mhw_days"].mean(("latitude", "longitude")).plot()  # event days per year
+```
+
+| Variable | Meaning |
+|---|---|
+| `mhw_count` | events that start in the year |
+| `mhw_days` | event days in the calendar year |
+| `mhw_duration` | mean duration of the events that start in the year |
+| `mhw_intensity_mean`, `mhw_intensity_max`, `mhw_intensity_cumulative` | means over those events of their mean, peak and cumulative intensity |
+| `mhw_intensity_max_max` | largest peak among them |
+| `mhw_total_icum` | total cumulative intensity of the year |
+| `mhw_moderate_days` … `mhw_extreme_days` | event days in each category in the calendar year (needs `mhw_severity`) |
+
+`cum_by` sets where `mhw_total_icum` counts an event that crosses a year:
+`"start_year"` (default) puts its whole cumulative intensity in the year it starts, as
+`blockAverage` documents; `"calendar_year"` sums the daily intensities within each year.
+(`blockAverage`'s code puts such an event in the year it ends; every other quantity
+matches it exactly.) Cells without data are NaN when the threshold or the climatology is
+in the input; otherwise pass `valid=`, for example `ds["thetao"].notnull().any("time")`.
+
 ## Example notebooks
 
 The [`examples/`](examples/) folder has six short notebooks that run on real data

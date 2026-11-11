@@ -50,7 +50,7 @@ import xarray as xr
 __version__ = "3.0.0"
 
 __all__ = ["detect_mhw_core", "mhw_1d_wrapper", "xrMHW_func", "xrMHW_clim",
-           "xrMHW_events", "xrMHW_doy", "xrMHW_detrend"]
+           "xrMHW_events", "xrMHW_doy", "xrMHW_detrend", "xrMHW_annual"]
 
 # Number of days on the 366-day (leap-year) day-of-year grid.
 _NDOY = 366
@@ -1588,4 +1588,227 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
                 'xrMHW_trend_degree', 'xrMHW_period_baselines'):
         if key in clim.attrs:
             ds_out.attrs['mhw_' + key[6:]] = clim.attrs[key]
+    return ds_out
+
+
+# =============================================================================
+# 5. ANNUAL METRICS
+# =============================================================================
+
+_CATEGORY_NAMES = ('moderate', 'strong', 'severe', 'extreme')
+
+
+def _annual_block(mask, inten, sev, yi=(), ystart=(), ny=1, cold=False,
+                  cum_by_start=True, categories=True):
+    """Annual metrics of a block of cells, vectorised over the cells.
+
+    `mask`, `inten` and `sev` are (..., time): the event days, the daily
+    intensity and the daily severity. Events are the runs of event days (a
+    joined gap is part of its event). Event metrics go to the year in which
+    the event starts; days are counted in each calendar year.
+    """
+    shape = mask.shape[:-1]
+    T = mask.shape[-1]
+    m = mask.reshape(-1, T).astype(bool)
+    n = m.shape[0]
+    x = np.where(m, np.nan_to_num(inten.reshape(-1, T).astype(np.float64)), 0.0)
+    yi = np.asarray(yi)
+    ystart = np.asarray(ystart)
+
+    # Runs of event days: start s (inclusive) and end e (exclusive) per row.
+    d = np.diff(m.astype(np.int8), axis=1, prepend=0, append=0)
+    rs, s = np.nonzero(d == 1)
+    _, e = np.nonzero(d == -1)
+    dur = (e - s).astype(np.float64)
+    C = np.zeros((n, T + 1))
+    np.cumsum(x, axis=1, out=C[:, 1:])
+    cum = C[rs, e] - C[rs, s]
+    # Peak of each run: the largest anomaly, or the most negative for cold spells.
+    sign = -1.0 if cold else 1.0
+    flat = np.append(np.where(m, sign * x, -np.inf).ravel(), -np.inf)
+    idx = np.empty(2 * len(s), np.int64)
+    idx[0::2] = rs * T + s
+    idx[1::2] = rs * T + e
+    peak = sign * np.maximum.reduceat(flat, idx)[0::2] if len(s) else np.zeros(0)
+
+    key = rs * ny + yi[s]
+    size = n * ny
+
+    def per_start_year(w=None):
+        return np.bincount(key, weights=w, minlength=size).reshape(n, ny)
+
+    count = per_start_year()
+    with np.errstate(invalid='ignore', divide='ignore'):
+        safe = np.where(count > 0, count, np.nan)
+        duration = per_start_year(dur) / safe
+        i_mean = per_start_year(cum / np.maximum(dur, 1)) / safe
+        i_max = per_start_year(peak) / safe
+        i_cum = per_start_year(cum) / safe
+    i_max_max = np.full(size, -np.inf)
+    if len(s):
+        np.maximum.at(i_max_max, key, sign * peak)
+    i_max_max = np.where(np.isfinite(i_max_max), sign * i_max_max, np.nan).reshape(n, ny)
+
+    days = np.add.reduceat(m.astype(np.int32), ystart, axis=1).astype(np.float64)
+    if cum_by_start:
+        total_icum = per_start_year(cum)
+    else:
+        total_icum = np.add.reduceat(x, ystart, axis=1)
+
+    out = [count, days, duration, i_mean, i_max, i_max_max, i_cum, total_icum]
+    if categories:
+        with np.errstate(invalid='ignore'):
+            cat = np.floor(sev.reshape(-1, T))
+        cat = np.where(m, cat, 0)
+        for sel in (cat == 1, cat == 2, cat == 3, cat >= 4):
+            out.append(np.add.reduceat(sel.astype(np.int32), ystart,
+                                       axis=1).astype(np.float64))
+    return tuple(o.reshape(shape + (ny,)) for o in out)
+
+
+def xrMHW_annual(events, cum_by='start_year', valid=None):
+    """
+    Annual metrics per grid cell from the daily event fields.
+
+    Takes the output of `xrMHW_events` or `xrMHW_func` and returns, for each
+    cell and calendar year, the quantities of marineHeatWaves' `blockAverage`
+    (one-year blocks): number of events, event days, mean duration, mean and
+    peak intensity, cumulative intensity and, when the severity is present,
+    the days in each category. These are the quantities usually mapped,
+    trended or compared between baselines (Smith et al. 2025, Box 1).
+
+    Parameters
+    ----------
+    events : xr.Dataset
+        Output of `xrMHW_events` or `xrMHW_func` with ``mhw_intensity`` (or
+        ``mcs_intensity``). ``*_duration`` is used, if present, to mark the
+        event days; ``*_severity``, if present, gives the category days.
+        Event days are the runs of non-missing values, so the fields must not
+        be subset in time after detection.
+    cum_by : {'start_year', 'calendar_year'}
+        Where the total cumulative intensity of the year (``*_total_icum``)
+        is counted.
+
+        * ``'start_year'`` (default): the whole cumulative intensity of an
+          event goes to the year in which it starts, as stated in
+          marineHeatWaves' `blockAverage`. (Its code puts events that cross
+          a year into the year in which they end.)
+        * ``'calendar_year'``: the daily intensities are summed within each
+          calendar year, so an event that crosses a year is split.
+    valid : xr.DataArray of bool, optional
+        Cells with data, e.g. ``ds['sst'].notnull().any('time')``; the
+        others are NaN. By default the cells where ``*_threshold`` or
+        ``climatology`` is present when ``events`` has them; otherwise every
+        cell counts, and cells without data show zero events.
+
+    Returns
+    -------
+    xr.Dataset
+        On the input grid with ``year`` in place of ``time``. With prefix
+        ``mhw`` (or ``mcs``):
+
+        * ``mhw_count`` — events that start in the year;
+        * ``mhw_days`` — event days in the calendar year;
+        * ``mhw_duration`` — mean duration of the events that start in the
+          year (NaN without events);
+        * ``mhw_intensity_mean``, ``mhw_intensity_max`` and
+          ``mhw_intensity_cumulative`` — means over those events of their
+          mean, peak and cumulative intensity;
+        * ``mhw_intensity_max_max`` — the largest peak among them (the most
+          negative for cold spells);
+        * ``mhw_total_icum`` — total cumulative intensity of the year, by
+          `cum_by`;
+        * ``mhw_moderate_days`` … ``mhw_extreme_days`` — event days in each
+          Hobday et al. (2018) category in the calendar year, from the
+          severity (floor of S: 1, 2, 3, 4 or more).
+    """
+    if cum_by not in ('start_year', 'calendar_year'):
+        raise ValueError(f"cum_by must be 'start_year' or 'calendar_year', not {cum_by!r}.")
+    if not isinstance(events, xr.Dataset):
+        raise TypeError("`events` must be the xarray.Dataset returned by "
+                        "xrMHW_events or xrMHW_func.")
+    found = [p for p in ('mhw', 'mcs') if f'{p}_intensity' in events]
+    if len(found) != 1:
+        raise ValueError(
+            "`events` must contain exactly one of 'mhw_intensity' or "
+            "'mcs_intensity' (request it with output_vars=['intensity', ...]).")
+    prefix = found[0]
+    if 'time' not in events.indexes:
+        raise ValueError("`events` must have a 'time' coordinate.")
+    time = events.indexes['time']
+    if not time.is_monotonic_increasing:
+        raise ValueError("The time coordinate must be increasing.")
+
+    inten = events[f'{prefix}_intensity']
+    mask_src = events.get(f'{prefix}_duration', inten)
+    mask = mask_src.notnull()
+    has_sev = f'{prefix}_severity' in events
+    sev = events[f'{prefix}_severity'] if has_sev else inten
+
+    years_all = np.asarray(time.year)
+    years, yi = np.unique(years_all, return_inverse=True)
+    ystart = np.flatnonzero(np.diff(yi, prepend=-1))
+    inputs = [mask, inten, sev]
+    if inten.chunks is not None:
+        inputs = [a.chunk({'time': -1}) for a in inputs]
+
+    names = ['count', 'days', 'duration', 'intensity_mean', 'intensity_max',
+             'intensity_max_max', 'intensity_cumulative', 'total_icum']
+    if has_sev:
+        names += [f'{c}_days' for c in _CATEGORY_NAMES]
+    results = xr.apply_ufunc(
+        _annual_block, *inputs,
+        kwargs=dict(yi=yi, ystart=ystart, ny=len(years), cold=prefix == 'mcs',
+                    cum_by_start=cum_by == 'start_year', categories=has_sev),
+        input_core_dims=[['time']] * 3,
+        output_core_dims=[['year']] * len(names),
+        dask='parallelized',
+        output_dtypes=[np.float64] * len(names),
+        dask_gufunc_kwargs={'output_sizes': {'year': len(years)}},
+    )
+
+    if valid is None:
+        ref = next((events[v] for v in (f'{prefix}_threshold', 'climatology')
+                    if v in events), None)
+        if ref is not None:
+            valid = ref.notnull().any('time') if 'time' in ref.dims else ref.notnull()
+
+    units = inten.attrs.get('units', 'degC')
+    meta = {
+        'count': ('Number of events that start in the year', '1'),
+        'days': ('Event days in the calendar year', 'days'),
+        'duration': ('Mean duration of the events that start in the year', 'days'),
+        'intensity_mean': ('Mean of the mean intensities of the events that '
+                           'start in the year', units),
+        'intensity_max': ('Mean of the peak intensities of the events that '
+                          'start in the year', units),
+        'intensity_max_max': ('Largest peak intensity among the events that '
+                              'start in the year', units),
+        'intensity_cumulative': ('Mean of the cumulative intensities of the '
+                                 'events that start in the year', f'{units} days'),
+        'total_icum': ('Total cumulative intensity of the year (' +
+                       ('events counted in their start year'
+                        if cum_by == 'start_year' else
+                        'daily intensities summed within the calendar year') + ')',
+                       f'{units} days'),
+    }
+    for c in _CATEGORY_NAMES:
+        meta[f'{c}_days'] = (f'Event days in category {c} in the calendar year '
+                             '(floor of the severity index)', 'days')
+
+    ds_out = xr.Dataset()
+    for name, da in zip(names, results):
+        if valid is not None:
+            da = da.where(valid)
+        long_name, u = meta[name]
+        ds_out[f'{prefix}_{name}'] = da.assign_attrs(long_name=long_name, units=u)
+    ds_out = ds_out.assign_coords(year=np.asarray(years, dtype=np.int32))
+    for c in events.coords:
+        if c != 'time' and 'time' not in events[c].dims:
+            ds_out = ds_out.assign_coords({c: events[c]})
+    ds_out.attrs = {k: v for k, v in events.attrs.items()}
+    ds_out.attrs.update(mhw_annual_cum_by=cum_by,
+                        mhw_annual_note=('Event metrics are counted in the year in '
+                                         'which the event starts; days in each '
+                                         'calendar year.'))
     return ds_out
