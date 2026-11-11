@@ -178,9 +178,10 @@ def test_fdr_equals_benjamini_hochberg(field):
 def test_dask_and_row_groups_equal_memory(field, monkeypatch):
     pytest.importorskip("dask")
     mem = xrMHW.xrMHW_trend(field, test="hamed_rao", fdr=0.1)
-    lazy = xrMHW.xrMHW_trend(field.chunk({"lat": 5, "lon": 10, "year": 11}),
-                             test="hamed_rao", fdr=0.1)
-    assert lazy["slope"].chunks is not None
+    chunked = field.chunk({"lat": 5, "lon": 10, "year": 11})
+    assert xrMHW.xrMHW_trend(chunked, test="hamed_rao")["slope"].chunks is not None
+    lazy = xrMHW.xrMHW_trend(chunked, test="hamed_rao", fdr=0.1)
+    assert lazy["slope"].chunks is None        # fdr computes everything once
     monkeypatch.setattr(xrMHW, "_TREND_MAX_PAIRS", 2000)   # ~4 rows per group
     grouped = xrMHW.xrMHW_trend(field, test="hamed_rao", fdr=0.1)
     for v in mem.data_vars:
@@ -228,7 +229,124 @@ def test_dataset_of_annual_metrics():
     assert tr["mhw_days_slope"].attrs["units"] == "days per decade"
 
 
+# ---------------------------------------------------------------- confidence intervals
+def test_sen_interval_equals_theilslopes(field):
+    for alpha in (0.05, 0.10):
+        tr = xrMHW.xrMHW_trend(field, per="year", alpha=alpha)
+        lo, hi = tr["slope_low"].values.ravel(), tr["slope_high"].values.ravel()
+        X = _rows(field)
+        checked = 0
+        for r in range(len(X)):
+            ok = np.isfinite(X[r])
+            if ok.sum() < 3:
+                continue
+            ref = scipy_stats.theilslopes(X[r, ok], YEARS[ok], alpha=1 - alpha)
+            assert np.isclose(lo[r], ref.low_slope, rtol=0, atol=1e-12), (r, alpha)
+            assert np.isclose(hi[r], ref.high_slope, rtol=0, atol=1e-12), (r, alpha)
+            checked += 1
+        assert checked > 250
+    # the interval excludes zero about when the test rejects
+    sig = tr["p_value"] < 0.10
+    excl = (tr["slope_low"] > 0) | (tr["slope_high"] < 0)
+    assert float((sig == excl).mean()) > 0.95
+
+
+def test_ols_interval_equals_linregress(field):
+    from scipy.stats import t as student_t
+    tr = xrMHW.xrMHW_trend(field, method="ols", test="t", per="year")
+    lo, hi = tr["slope_low"].values.ravel(), tr["slope_high"].values.ravel()
+    X = _rows(field)
+    for r in range(len(X)):
+        ok = np.isfinite(X[r])
+        if ok.sum() < 3 or np.nanstd(X[r]) == 0:
+            continue
+        ref = scipy_stats.linregress(YEARS[ok], X[r, ok])
+        half = student_t.ppf(0.975, ok.sum() - 2) * ref.stderr
+        assert np.isclose(lo[r], ref.slope - half, rtol=1e-9, atol=1e-12), r
+        assert np.isclose(hi[r], ref.slope + half, rtol=1e-9, atol=1e-12), r
+    # a significant t-test is exactly an interval that excludes zero
+    excl = (tr["slope_low"] > 0) | (tr["slope_high"] < 0)
+    assert bool(((tr["p_value"] < 0.05) == excl).where(tr["p_value"].notnull(), True).all())
+
+
+def test_hamed_rao_interval_is_wider_with_positive_autocorrelation(field):
+    mk = xrMHW.xrMHW_trend(field, per="year")
+    hr = xrMHW.xrMHW_trend(field, test="hamed_rao", per="year")
+    width_mk = mk["slope_high"] - mk["slope_low"]
+    width_hr = hr["slope_high"] - hr["slope_low"]
+    both = width_mk.notnull() & width_hr.notnull()
+    assert float((width_hr >= width_mk - 1e-12).where(both).mean()) > 0.7
+    assert hr["slope_low"].isnull().equals(hr["p_value"].isnull() | hr["slope"].isnull())
+
+
+def test_lag_equals_pymannkendall(field):
+    pmk = pytest.importorskip("pymannkendall")
+    tr = xrMHW.xrMHW_trend(field, test="hamed_rao", lag=3, per="year")
+    p = tr["p_value"].values.ravel()
+    X = _rows(field)
+    complete = np.flatnonzero(np.isfinite(X).all(axis=1))
+    for r in complete:
+        with np.errstate(invalid="ignore"):
+            ref = pmk.hamed_rao_modification_test(X[r], lag=3).p
+        assert np.isclose(p[r], ref, rtol=0, atol=1e-10, equal_nan=True), r
+    # white noise: negative corrected variances (NaN p) are rarer with lag=3
+    rng = np.random.default_rng(8)
+    noise = xr.DataArray(rng.normal(size=(3000, N_YEARS)), dims=("cell", "year"),
+                         coords={"year": YEARS})
+    nan_all = int(xrMHW.xrMHW_trend(noise, test="hamed_rao")["p_value"].isnull().sum())
+    nan_3 = int(xrMHW.xrMHW_trend(noise, test="hamed_rao", lag=3)["p_value"].isnull().sum())
+    assert nan_3 < nan_all and nan_all > 10
+
+
+# ---------------------------------------------------------------- FDR by level
+def test_fdr_per_depth_level(field):
+    if not hasattr(scipy_stats, "false_discovery_control"):
+        pytest.skip("needs SciPy >= 1.11")
+    rng = np.random.default_rng(4)
+    deep = field.copy(data=rng.normal(size=field.shape))        # no trend at depth
+    cube = xr.concat([field, deep], dim="depth")
+    cube = cube.assign_coords(depth=[0.5, 100.0]).transpose("lat", "depth", "lon", "year")
+    auto = xrMHW.xrMHW_trend(cube, fdr=0.10)
+    assert auto.attrs["trend_fdr_by"] == "depth"
+    whole = xrMHW.xrMHW_trend(cube, fdr=0.10, fdr_by=None)
+    assert whole.attrs["trend_fdr_by"] == "whole field"
+    assert auto["significant_fdr"].dims == auto["p_value"].dims
+    for k in range(2):
+        p = auto["p_value"].isel(depth=k).values.ravel()
+        ok = np.isfinite(p)
+        expected = scipy_stats.false_discovery_control(p[ok], method="bh") <= 0.10
+        got = auto["significant_fdr"].isel(depth=k).values.ravel()
+        assert np.array_equal(got[ok] == 1, expected), k
+    p = whole["p_value"].values.ravel()
+    ok = np.isfinite(p)
+    expected = scipy_stats.false_discovery_control(p[ok], method="bh") <= 0.10
+    assert np.array_equal(whole["significant_fdr"].values.ravel()[ok] == 1, expected)
+    assert not auto["significant_fdr"].equals(whole["significant_fdr"])
+    by_lat = xrMHW.xrMHW_trend(cube, fdr=0.10, fdr_by=["depth", "lat"])
+    assert by_lat.attrs["trend_fdr_by"] == "depth, lat"
+
+
+def test_long_series_warning_and_ols_without_pairs():
+    rng = np.random.default_rng(2)
+    da = xr.DataArray(rng.normal(size=(3, 2000)), dims=("cell", "time"),
+                      coords={"time": pd.date_range("2000-01-01", periods=2000)})
+    with pytest.warns(UserWarning, match="every pair"):
+        xrMHW.xrMHW_trend(da.isel(cell=[0]), dim="time")
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.simplefilter("error")
+        tr = xrMHW.xrMHW_trend(da, dim="time", method="ols", test="t", per="year")
+    ref = scipy_stats.linregress(np.arange(2000) / 365.2425, da.values[0])
+    assert np.isclose(float(tr["slope"][0]), ref.slope, rtol=1e-6)
+
+
 def test_wrong_inputs(field):
+    with pytest.raises(ValueError, match="lag"):
+        xrMHW.xrMHW_trend(field, lag=3)
+    with pytest.raises(ValueError, match="fdr_by"):
+        xrMHW.xrMHW_trend(field, fdr=0.1, fdr_by="depth")
+    with pytest.raises(ValueError, match="alpha"):
+        xrMHW.xrMHW_trend(field, alpha=95)
     with pytest.raises(ValueError, match="method"):
         xrMHW.xrMHW_trend(field, method="median")
     with pytest.raises(ValueError, match="test"):

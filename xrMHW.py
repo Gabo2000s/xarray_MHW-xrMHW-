@@ -51,7 +51,7 @@ __version__ = "3.0.0"
 
 __all__ = ["detect_mhw_core", "mhw_1d_wrapper", "xrMHW_func", "xrMHW_clim",
            "xrMHW_events", "xrMHW_doy", "xrMHW_detrend", "xrMHW_annual",
-           "xrMHW_trend"]
+           "xrMHW_trend", "xrMHW_monthly"]
 
 # Number of days on the 366-day (leap-year) day-of-year grid.
 _NDOY = 366
@@ -255,14 +255,20 @@ def _climatology_1d(year, doy, temp, clim_period, pctile, window_half_width,
 
 def _events_1d(temp, clim_seas, clim_thresh, min_duration=5,
                join_across_gaps=True, max_gap=2, cold_spells=False,
-               compute_event_metrics=True, join_method='post-filter'):
+               compute_event_metrics=True, join_method='post-filter',
+               compute_rates=False):
     """Events of one series against a climatology and threshold given per time step.
 
     This is the second half of `detect_mhw_core`, unchanged. `clim_seas` and
     `clim_thresh` have the length of `temp`, so the threshold may vary from
     one year to the next (any baseline, not only a fixed one).
-    Returns the same 9-tuple as `detect_mhw_core`.
+    Returns the same 9-tuple as `detect_mhw_core`; with ``compute_rates`` two
+    more fields follow, the onset and decline rates of each event
+    (marineHeatWaves' ``rate_onset`` and ``rate_decline``), broadcast over its
+    days.
     """
+    if compute_rates:
+        compute_event_metrics = True
     T = len(temp)
     # --- Continuous diagnostics -------------------------------------------
     anomaly = temp - clim_seas
@@ -324,6 +330,12 @@ def _events_1d(temp, clim_seas, clim_thresh, min_duration=5,
                 mhw_category, mhw_intensity_max, mhw_intensity_cum, severity)
 
     is_mhw = np.zeros(T, dtype=bool)
+    if compute_rates:
+        rate_onset = np.zeros(T, dtype=float)
+        rate_decline = np.zeros(T, dtype=float)
+        # marineHeatWaves works on the sign-flipped series for cold spells,
+        # so its rates are positive for cooling too.
+        flipped = -anomaly if cold_spells else anomaly
     active_labels = np.unique(events)
     active_labels = active_labels[active_labels != 0]
 
@@ -357,8 +369,29 @@ def _events_1d(temp, clim_seas, clim_thresh, min_duration=5,
         mhw_intensity_cum[idx] = i_cum
         is_mhw[idx] = True
 
-    return (clim_seas, clim_thresh, anomaly, is_mhw, mhw_duration,
-            mhw_category, mhw_intensity_max, mhw_intensity_cum, severity)
+        if compute_rates:
+            # Rates of onset and decline as in marineHeatWaves.detect: the
+            # strength at the start and end is taken half a day outside the
+            # event; at the edges of the record, the first or last day.
+            a = flipped[idx]
+            s0, s1 = idx[0], idx[-1]
+            pk = peak_idx
+            if s0 > 0:
+                onset = (a[pk] - 0.5 * (a[0] + flipped[s0 - 1])) / (pk + 0.5)
+            else:
+                onset = (a[pk] - a[0]) / (pk if pk > 0 else 1.0)
+            if s1 < T - 1:
+                decline = (a[pk] - 0.5 * (a[-1] + flipped[s1 + 1])) / (dur - 1 - pk + 0.5)
+            else:
+                decline = (a[pk] - a[-1]) / (dur - 1 - pk if pk != dur - 1 else 1.0)
+            rate_onset[idx] = onset
+            rate_decline[idx] = decline
+
+    out = (clim_seas, clim_thresh, anomaly, is_mhw, mhw_duration,
+           mhw_category, mhw_intensity_max, mhw_intensity_cum, severity)
+    if compute_rates:
+        out = out + (rate_onset, rate_decline)
+    return out
 
 
 
@@ -491,11 +524,12 @@ def mhw_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year,
     )
 
 
-def _nan_outputs(T):
-    """The 9-tuple returned for a cell with no data (land, masked)."""
+def _nan_outputs(T, compute_rates=False):
+    """The 9-tuple (11 with the rates) returned for a cell with no data."""
     nan_arr = np.full(T, np.nan)
-    return (nan_arr, nan_arr, nan_arr, np.zeros(T, dtype=bool),
-            nan_arr, nan_arr, nan_arr, nan_arr, nan_arr)
+    out = (nan_arr, nan_arr, nan_arr, np.zeros(T, dtype=bool),
+           nan_arr, nan_arr, nan_arr, nan_arr, nan_arr)
+    return out + (nan_arr, nan_arr) if compute_rates else out
 
 
 def _fill_short_gaps(temp, max_gap_interp):
@@ -574,7 +608,7 @@ def _events_1d_wrapper(time_ordinal, temp, seas, thresh, *coef, layout='doy',
     T = len(time_ordinal)
     temp = temp.copy()
     if np.isnan(temp).all():
-        return _nan_outputs(T)
+        return _nan_outputs(T, kwargs.get('compute_rates', False))
     _fill_short_gaps(temp, max_gap_interp)
     seas_t, thresh_t = _expand_clim(
         time_ordinal.astype(int), seas, thresh, coef[0] if coef else None,
@@ -732,6 +766,15 @@ _VAR_ATTRS = {
     'cum_intensity': (
         'Cumulative intensity of the event', 'degC days',
         'Temperature anomaly integrated over the duration of the event.'),
+    'rate_onset': (
+        'Onset rate of the event', 'degC day-1',
+        'Rise of the anomaly from the start of the event to its peak, per day '
+        '(marineHeatWaves rate_onset; positive for cold spells too). Only '
+        'returned when requested.'),
+    'rate_decline': (
+        'Decline rate of the event', 'degC day-1',
+        'Fall of the anomaly from the peak to the end of the event, per day '
+        '(marineHeatWaves rate_decline). Only returned when requested.'),
     'climatology': (
         'Seasonal climatological mean temperature', 'degC',
         'Day-of-year climatological mean over the baseline period, smoothed.'),
@@ -752,18 +795,29 @@ def _canonical_outputs(prefix):
             f'{prefix}_cum_intensity', 'climatology', f'{prefix}_threshold']
 
 
+def _optional_outputs(prefix):
+    """Variables returned only when requested by name."""
+    return [f'{prefix}_rate_onset', f'{prefix}_rate_decline']
+
+
+def _wants_rates(selected, prefix):
+    return bool(set(_optional_outputs(prefix)) & set(selected))
+
+
 def _resolve_output_vars(output_vars, prefix):
     """Resolve requested output names to canonical dataset variable names.
 
     Accepts canonical names (``'mhw_severity'``), short aliases
     (``'intensity'``, ``'severity'``, ``'duration'``, ``'category'``,
     ``'max_intensity'``, ``'cum_intensity'``, ``'clim'``/``'climatology'``,
-    ``'thresh'``/``'threshold'``), a single string, or a sequence.
-    ``output_vars=None`` returns every variable.
+    ``'thresh'``/``'threshold'``, and the optional ``'rate_onset'`` and
+    ``'rate_decline'``), a single string, or a sequence.
+    ``output_vars=None`` returns every variable except the optional ones.
     """
     canonical = _canonical_outputs(prefix)
     if output_vars is None:
         return list(canonical)
+    canonical = canonical + _optional_outputs(prefix)
 
     aliases = {
         'intensity': f'{prefix}_intensity',
@@ -846,9 +900,13 @@ def _time_ordinal_da(ds):
 def _assemble_outputs(results, ds, prefix, selected):
     """Mask the per-cell results with the event mask and build the output dataset."""
     (seas, thresh, anomaly, is_mhw, duration, category,
-     intensity_max, intensity_cum, severity) = results
+     intensity_max, intensity_cum, severity) = results[:9]
 
-    available = {
+    available = {}
+    if len(results) == 11:
+        available[f'{prefix}_rate_onset'] = (results[9].where(is_mhw), 'rate_onset')
+        available[f'{prefix}_rate_decline'] = (results[10].where(is_mhw), 'rate_decline')
+    available.update({
         f'{prefix}_intensity': (anomaly.where(is_mhw), 'intensity'),
         f'{prefix}_severity': (severity.where(is_mhw), 'severity'),
         f'{prefix}_duration': (duration.where(is_mhw), 'duration'),
@@ -857,7 +915,7 @@ def _assemble_outputs(results, ds, prefix, selected):
         f'{prefix}_cum_intensity': (intensity_cum.where(is_mhw), 'cum_intensity'),
         'climatology': (seas, 'climatology'),
         f'{prefix}_threshold': (thresh, 'threshold'),
-    }
+    })
 
     ds_out = xr.Dataset()
     for name in selected:
@@ -896,10 +954,13 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None,
         Start and end years (inclusive) of the climatology baseline, e.g.
         ``(1991, 2020)`` for the current WMO normal.
     output_vars : str or sequence of str, optional
-        Which variables to return. ``None`` (default) returns all of them.
-        Restricting the selection also skips the work needed for the omitted
-        fields: asking only for continuous fields (e.g.
+        Which variables to return. ``None`` (default) returns the eight
+        below. Restricting the selection also skips the work needed for the
+        omitted fields: asking only for continuous fields (e.g.
         ``['severity', 'climatology']``) bypasses the per-event metric loop.
+        ``'rate_onset'`` and ``'rate_decline'`` (marineHeatWaves' onset and
+        decline rates of each event, broadcast over its days) are returned
+        only when named.
     **kwargs
         Passed to the detection logic:
 
@@ -946,7 +1007,11 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None,
     exceedance in each individual cell, not the lifetime of a coherent 3-D
     structure; object-level tracking is out of scope for this package.
     """
-    if baseline != 'fixed':
+    # The rates are computed by the two-step path, which gives the same events.
+    p = 'mcs' if kwargs.get('cold_spells') else 'mhw'
+    rates = (output_vars is not None
+             and _wants_rates(_resolve_output_vars(output_vars, p), p))
+    if baseline != 'fixed' or rates:
         if baseline not in _BASELINES:
             raise ValueError(f"baseline must be one of {sorted(_BASELINES)}, "
                              f"not {baseline!r}.")
@@ -1508,7 +1573,8 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
     output_vars : str or sequence of str, optional
         Which variables to return. ``None`` (default) returns the six event
         fields; ``'climatology'`` and ``'threshold'`` can be added, expanded
-        to every date.
+        to every date, and ``'rate_onset'`` and ``'rate_decline'`` (see
+        `xrMHW_func`).
     **kwargs
         * **min_duration** (int, default 5) — minimum event length in days.
         * **join_across_gaps** (bool, default True) and **max_gap**
@@ -1541,6 +1607,8 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
     else:
         selected = _resolve_output_vars(output_vars, prefix)
     metric_names = {f'{prefix}_{f}' for f in _EVENT_METRIC_FIELDS}
+    rates = _wants_rates(selected, prefix)
+    n_out = 11 if rates else 9
 
     seas, thresh = clim['climatology'], clim[thr_name]
     core = {'doy': ['doy'], 'period': ['period', 'doy'], 'time': ['time']}[layout]
@@ -1563,13 +1631,13 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
     results = xr.apply_ufunc(
         _events_1d_wrapper, *inputs,
         kwargs=dict(max_gap_interp=int(max_gap_interp), cold_spells=cold_spells,
-                    compute_event_metrics=bool(metric_names & set(selected)),
-                    **extra, **params),
+                    compute_event_metrics=bool(metric_names & set(selected)) or rates,
+                    compute_rates=rates, **extra, **params),
         input_core_dims=core_dims,
-        output_core_dims=[['time']] * 9,
+        output_core_dims=[['time']] * n_out,
         vectorize=True,
         dask='parallelized',
-        output_dtypes=[np.float32] * 3 + [bool] + [np.float32] * 5,
+        output_dtypes=[np.float32] * 3 + [bool] + [np.float32] * (n_out - 4),
     )
 
     ds_out = _assemble_outputs(results, ds, prefix, selected)
@@ -1593,138 +1661,170 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
 
 
 # =============================================================================
-# 5. ANNUAL METRICS
+# 5. ANNUAL AND MONTHLY METRICS
 # =============================================================================
 
 _CATEGORY_NAMES = ('moderate', 'strong', 'severe', 'extreme')
 
+# Largest (cells x days) array built at once by the period metrics; a block
+# of cells is processed in groups below this size (~128 MB in float64).
+_PERIOD_MAX_ELEMENTS = 2 ** 24
 
-def _annual_block(mask, inten, sev, yi=(), ystart=(), ny=1, cold=False,
-                  cum_by_start=True, categories=True):
-    """Annual metrics of a block of cells, vectorised over the cells.
 
-    `mask`, `inten` and `sev` are (..., time): the event days, the daily
-    intensity and the daily severity. Events are the runs of event days (a
-    joined gap is part of its event). Event metrics go to the year in which
-    the event starts; days are counted in each calendar year.
-    """
-    shape = mask.shape[:-1]
-    T = mask.shape[-1]
-    m = mask.reshape(-1, T).astype(bool)
-    n = m.shape[0]
-    x = np.where(m, np.nan_to_num(inten.reshape(-1, T).astype(np.float64)), 0.0)
-    yi = np.asarray(yi)
-    ystart = np.asarray(ystart)
+def _run_sums(x, rs, s, e, T):
+    """Sum of `x` (n, T) over each run [s, e) of row rs."""
+    C = np.zeros((x.shape[0], T + 1))
+    np.cumsum(x, axis=1, out=C[:, 1:])
+    return C[rs, e] - C[rs, s]
+
+
+def _period_rows(m, x, sev, amp, ron, rde, bi, bstart, nb, cold, cum_by_start,
+                 categories, relthresh, rates):
+    """Period metrics of a group of cells (rows); see `_period_block`."""
+    n, T = m.shape
+    x = np.where(m, np.nan_to_num(x.astype(np.float64)), 0.0)
 
     # Runs of event days: start s (inclusive) and end e (exclusive) per row.
     d = np.diff(m.astype(np.int8), axis=1, prepend=0, append=0)
     rs, s = np.nonzero(d == 1)
     _, e = np.nonzero(d == -1)
+    nrun = len(s)
     dur = (e - s).astype(np.float64)
-    C = np.zeros((n, T + 1))
-    np.cumsum(x, axis=1, out=C[:, 1:])
-    cum = C[rs, e] - C[rs, s]
-    # Peak of each run: the largest anomaly, or the most negative for cold spells.
+    cum = _run_sums(x, rs, s, e, T)
+    var = np.maximum(_run_sums(x * x, rs, s, e, T) / np.maximum(dur, 1)
+                     - (cum / np.maximum(dur, 1)) ** 2, 0.0)
+
+    # Peak of each run (first day of the largest anomaly, or the most
+    # negative for cold spells), as marineHeatWaves' tt_peak.
     sign = -1.0 if cold else 1.0
-    flat = np.append(np.where(m, sign * x, -np.inf).ravel(), -np.inf)
-    idx = np.empty(2 * len(s), np.int64)
-    idx[0::2] = rs * T + s
-    idx[1::2] = rs * T + e
-    peak = sign * np.maximum.reduceat(flat, idx)[0::2] if len(s) else np.zeros(0)
+    flat = (sign * x).ravel()
+    pos = np.flatnonzero(m.ravel())                 # event days, run by run
+    runid = np.repeat(np.arange(nrun), (e - s))
+    if nrun:
+        peakval = np.maximum.reduceat(flat[pos], np.r_[0, np.cumsum(e - s)[:-1]])
+        is_pk = flat[pos] == peakval[runid]
+        _, first = np.unique(runid[is_pk], return_index=True)
+        peak_pos = pos[is_pk][first]
+        peak = sign * peakval
+    else:
+        peak_pos = np.zeros(0, np.int64)
+        peak = np.zeros(0)
 
-    key = rs * ny + yi[s]
-    size = n * ny
+    key = rs * nb + bi[s]
+    size = n * nb
 
-    def per_start_year(w=None):
-        return np.bincount(key, weights=w, minlength=size).reshape(n, ny)
+    def by_start(w=None):
+        return np.bincount(key, weights=w, minlength=size).reshape(n, nb)
 
-    count = per_start_year()
+    def calendar(arr):
+        return np.add.reduceat(arr, bstart, axis=1).astype(np.float64)
+
+    count = by_start()
     with np.errstate(invalid='ignore', divide='ignore'):
         safe = np.where(count > 0, count, np.nan)
-        duration = per_start_year(dur) / safe
-        i_mean = per_start_year(cum / np.maximum(dur, 1)) / safe
-        i_max = per_start_year(peak) / safe
-        i_cum = per_start_year(cum) / safe
-    i_max_max = np.full(size, -np.inf)
-    if len(s):
-        np.maximum.at(i_max_max, key, sign * peak)
-    i_max_max = np.where(np.isfinite(i_max_max), sign * i_max_max, np.nan).reshape(n, ny)
 
-    days = np.add.reduceat(m.astype(np.int32), ystart, axis=1).astype(np.float64)
-    if cum_by_start:
-        total_icum = per_start_year(cum)
-    else:
-        total_icum = np.add.reduceat(x, ystart, axis=1)
+        def mean(w):
+            return by_start(w) / safe
 
-    out = [count, days, duration, i_mean, i_max, i_max_max, i_cum, total_icum]
+        out = {
+            'count': count,
+            'days': calendar(m.astype(np.int32)),
+            'duration': mean(dur),
+            'intensity_mean': mean(cum / np.maximum(dur, 1)),
+            'intensity_max': mean(peak),
+            'intensity_var': mean(np.sqrt(var)),
+            'intensity_cumulative': mean(cum),
+        }
+    mm = np.full(size, -np.inf)
+    if nrun:
+        np.maximum.at(mm, key, sign * peak)
+    out['intensity_max_max'] = np.where(np.isfinite(mm), sign * mm, np.nan).reshape(n, nb)
+    out['total_icum'] = by_start(cum) if cum_by_start else calendar(x)
+
+    if relthresh:
+        a = np.where(m, np.nan_to_num(amp.astype(np.float64)), 0.0)
+        y = x - a                                  # temperature minus threshold
+        ycum = _run_sums(y, rs, s, e, T)
+        yvar = np.maximum(_run_sums(y * y, rs, s, e, T) / np.maximum(dur, 1)
+                          - (ycum / np.maximum(dur, 1)) ** 2, 0.0)
+        ypk = y.ravel()[peak_pos]
+        with np.errstate(invalid='ignore', divide='ignore'):
+            out['intensity_max_relThresh'] = by_start(ypk) / safe
+            out['intensity_mean_relThresh'] = by_start(ycum / np.maximum(dur, 1)) / safe
+            out['intensity_var_relThresh'] = by_start(np.sqrt(yvar)) / safe
+            out['intensity_cumulative_relThresh'] = by_start(ycum) / safe
+    if rates:
+        start = rs * T + s
+        with np.errstate(invalid='ignore', divide='ignore'):
+            out['rate_onset'] = by_start(ron.astype(np.float64).ravel()[start]) / safe
+            out['rate_decline'] = by_start(rde.astype(np.float64).ravel()[start]) / safe
     if categories:
         with np.errstate(invalid='ignore'):
-            cat = np.floor(sev.reshape(-1, T))
-        cat = np.where(m, cat, 0)
-        for sel in (cat == 1, cat == 2, cat == 3, cat >= 4):
-            out.append(np.add.reduceat(sel.astype(np.int32), ystart,
-                                       axis=1).astype(np.float64))
-    return tuple(o.reshape(shape + (ny,)) for o in out)
+            cat = np.where(m, np.floor(sev), 0)
+        for name, sel in zip(_CATEGORY_NAMES, (cat == 1, cat == 2, cat == 3, cat >= 4)):
+            out[f'{name}_days'] = calendar(sel.astype(np.int32))
+    return out
 
 
-def xrMHW_annual(events, cum_by='start_year', valid=None):
-    """
-    Annual metrics per grid cell from the daily event fields.
+def _period_block(mask, inten, sev, amp, ron, rde, names=(), bi=(), bstart=(), nb=1,
+                  cold=False, cum_by_start=True, categories=True, relthresh=False,
+                  rates=False):
+    """Period metrics of a block of cells (..., time), vectorised over the
+    cells and processed in groups that keep each (cells x days) array below
+    `_PERIOD_MAX_ELEMENTS`. Events are the runs of event days (a joined gap is
+    part of its event); event metrics go to the period in which the event
+    starts, days to each calendar period."""
+    shape = mask.shape[:-1]
+    T = mask.shape[-1]
+    arrs = [a.reshape(-1, T) for a in (mask, inten, sev, amp, ron, rde)]
+    n = arrs[0].shape[0]
+    bi, bstart = np.asarray(bi), np.asarray(bstart)
+    out = {k: np.empty((n, nb)) for k in names}
+    rows = max(1, _PERIOD_MAX_ELEMENTS // max(T, 1))
+    for a in range(0, n, rows):
+        part = _period_rows(arrs[0][a:a + rows].astype(bool),
+                            *(x[a:a + rows] for x in arrs[1:]),
+                            bi, bstart, nb, cold, cum_by_start, categories,
+                            relthresh, rates)
+        for k in names:
+            out[k][a:a + rows] = part[k]
+    return tuple(out[k].reshape(shape + (nb,)) for k in names)
 
-    Takes the output of `xrMHW_events` or `xrMHW_func` and returns, for each
-    cell and calendar year, the quantities of marineHeatWaves' `blockAverage`
-    (one-year blocks): number of events, event days, mean duration, mean and
-    peak intensity, cumulative intensity and, when the severity is present,
-    the days in each category. These are the quantities usually mapped,
-    trended or compared between baselines (Smith et al. 2025, Box 1).
 
-    Parameters
-    ----------
-    events : xr.Dataset
-        Output of `xrMHW_events` or `xrMHW_func` with ``mhw_intensity`` (or
-        ``mcs_intensity``). ``*_duration`` is used, if present, to mark the
-        event days; ``*_severity``, if present, gives the category days.
-        Event days are the runs of non-missing values, so the fields must not
-        be subset in time after detection.
-    cum_by : {'start_year', 'calendar_year'}
-        Where the total cumulative intensity of the year (``*_total_icum``)
-        is counted.
+def _period_meta(units, cum_by, when):
+    """long_name and units of each period variable; `when` is 'year' or 'month'."""
+    ev = f'the events that start in the {when}'
+    meta = {
+        'count': (f'Number of events that start in the {when}', '1'),
+        'days': (f'Event days in the calendar {when}', 'days'),
+        'ndays': (f'Days of the record in the {when}', 'days'),
+        'duration': (f'Mean duration of {ev}', 'days'),
+        'intensity_mean': (f'Mean of the mean intensities of {ev}', units),
+        'intensity_max': (f'Mean of the peak intensities of {ev}', units),
+        'intensity_max_max': (f'Largest peak intensity among {ev}', units),
+        'intensity_var': (f'Mean of the intensity standard deviations of {ev}', units),
+        'intensity_cumulative': (f'Mean of the cumulative intensities of {ev}',
+                                 f'{units} days'),
+        'total_icum': (f'Total cumulative intensity of the {when} (' +
+                       (f'events counted in their start {when}' if cum_by == 'start'
+                        else f'daily intensities summed within the calendar {when}') + ')',
+                       f'{units} days'),
+        'rate_onset': (f'Mean onset rate of {ev}', f'{units} day-1'),
+        'rate_decline': (f'Mean decline rate of {ev}', f'{units} day-1'),
+    }
+    for k, what in (('max', 'peak'), ('mean', 'mean'), ('var', 'standard deviation'),
+                    ('cumulative', 'cumulative')):
+        meta[f'intensity_{k}_relThresh'] = (
+            f'Mean {what} intensity relative to the threshold of {ev}',
+            f'{units} days' if k == 'cumulative' else units)
+    for c in _CATEGORY_NAMES:
+        meta[f'{c}_days'] = (f'Event days in category {c} in the calendar {when} '
+                             '(floor of the severity index)', 'days')
+    return meta
 
-        * ``'start_year'`` (default): the whole cumulative intensity of an
-          event goes to the year in which it starts, as stated in
-          marineHeatWaves' `blockAverage`. (Its code puts events that cross
-          a year into the year in which they end.)
-        * ``'calendar_year'``: the daily intensities are summed within each
-          calendar year, so an event that crosses a year is split.
-    valid : xr.DataArray of bool, optional
-        Cells with data, e.g. ``ds['sst'].notnull().any('time')``; the
-        others are NaN. By default the cells where ``*_threshold`` or
-        ``climatology`` is present when ``events`` has them; otherwise every
-        cell counts, and cells without data show zero events.
 
-    Returns
-    -------
-    xr.Dataset
-        On the input grid with ``year`` in place of ``time``. With prefix
-        ``mhw`` (or ``mcs``):
-
-        * ``mhw_count`` — events that start in the year;
-        * ``mhw_days`` — event days in the calendar year;
-        * ``mhw_duration`` — mean duration of the events that start in the
-          year (NaN without events);
-        * ``mhw_intensity_mean``, ``mhw_intensity_max`` and
-          ``mhw_intensity_cumulative`` — means over those events of their
-          mean, peak and cumulative intensity;
-        * ``mhw_intensity_max_max`` — the largest peak among them (the most
-          negative for cold spells);
-        * ``mhw_total_icum`` — total cumulative intensity of the year, by
-          `cum_by`;
-        * ``mhw_moderate_days`` … ``mhw_extreme_days`` — event days in each
-          Hobday et al. (2018) category in the calendar year, from the
-          severity (floor of S: 1, 2, 3, 4 or more).
-    """
-    if cum_by not in ('start_year', 'calendar_year'):
-        raise ValueError(f"cum_by must be 'start_year' or 'calendar_year', not {cum_by!r}.")
+def _period_metrics(events, freq, cum_by, valid, block_length=1):
+    """Shared engine of `xrMHW_annual` (freq='year') and `xrMHW_monthly`."""
     if not isinstance(events, xr.Dataset):
         raise TypeError("`events` must be the xarray.Dataset returned by "
                         "xrMHW_events or xrMHW_func.")
@@ -1739,33 +1839,53 @@ def xrMHW_annual(events, cum_by='start_year', valid=None):
     time = events.indexes['time']
     if not time.is_monotonic_increasing:
         raise ValueError("The time coordinate must be increasing.")
+    if not (isinstance(block_length, (int, np.integer)) and block_length >= 1):
+        raise ValueError(f"block_length must be a positive integer, not {block_length!r}.")
+
+    year = np.asarray(time.year)
+    if freq == 'month':
+        key = year * 12 + np.asarray(time.month) - 1
+    else:
+        key = (year - year.min()) // block_length
+    keys, bi = np.unique(key, return_inverse=True)
+    bstart = np.flatnonzero(np.diff(bi, prepend=-1))
+    nb = len(keys)
+    ndays = np.diff(np.r_[bstart, len(bi)]).astype(np.float64)
 
     inten = events[f'{prefix}_intensity']
-    mask_src = events.get(f'{prefix}_duration', inten)
-    mask = mask_src.notnull()
+    mask = events.get(f'{prefix}_duration', inten).notnull()
     has_sev = f'{prefix}_severity' in events
+    thr, clim = events.get(f'{prefix}_threshold'), events.get('climatology')
+    relthresh = (thr is not None and clim is not None and 'time' in thr.dims
+                 and 'time' in clim.dims)
+    rates = all(f'{prefix}_{r}' in events for r in ('rate_onset', 'rate_decline'))
     sev = events[f'{prefix}_severity'] if has_sev else inten
-
-    years_all = np.asarray(time.year)
-    years, yi = np.unique(years_all, return_inverse=True)
-    ystart = np.flatnonzero(np.diff(yi, prepend=-1))
-    inputs = [mask, inten, sev]
-    if inten.chunks is not None:
+    amp = (thr - clim) if relthresh else inten
+    ron = events[f'{prefix}_rate_onset'] if rates else inten
+    rde = events[f'{prefix}_rate_decline'] if rates else inten
+    inputs = [mask, inten, sev, amp, ron, rde]
+    if any(a.chunks is not None for a in inputs):
         inputs = [a.chunk({'time': -1}) for a in inputs]
 
     names = ['count', 'days', 'duration', 'intensity_mean', 'intensity_max',
-             'intensity_max_max', 'intensity_cumulative', 'total_icum']
+             'intensity_max_max', 'intensity_var', 'intensity_cumulative', 'total_icum']
+    if relthresh:
+        names += [f'intensity_{k}_relThresh' for k in ('max', 'mean', 'var', 'cumulative')]
+    if rates:
+        names += ['rate_onset', 'rate_decline']
     if has_sev:
         names += [f'{c}_days' for c in _CATEGORY_NAMES]
+    dim = 'time' if freq == 'month' else 'year'
     results = xr.apply_ufunc(
-        _annual_block, *inputs,
-        kwargs=dict(yi=yi, ystart=ystart, ny=len(years), cold=prefix == 'mcs',
-                    cum_by_start=cum_by == 'start_year', categories=has_sev),
-        input_core_dims=[['time']] * 3,
-        output_core_dims=[['year']] * len(names),
+        _period_block, *inputs,
+        kwargs=dict(names=tuple(names), bi=bi, bstart=bstart, nb=nb,
+                    cold=prefix == 'mcs', cum_by_start=cum_by == 'start',
+                    categories=has_sev, relthresh=relthresh, rates=rates),
+        input_core_dims=[['time']] * 6,
+        output_core_dims=[['__period']] * len(names),
         dask='parallelized',
         output_dtypes=[np.float64] * len(names),
-        dask_gufunc_kwargs={'output_sizes': {'year': len(years)}},
+        dask_gufunc_kwargs={'output_sizes': {'__period': nb}},
     )
 
     if valid is None:
@@ -1773,46 +1893,164 @@ def xrMHW_annual(events, cum_by='start_year', valid=None):
                     if v in events), None)
         if ref is not None:
             valid = ref.notnull().any('time') if 'time' in ref.dims else ref.notnull()
+        else:
+            warnings.warn(
+                "Neither the threshold nor the climatology is in `events`, so cells "
+                "without data cannot be told apart from cells without events and "
+                "show zero events. Pass valid=, e.g. ds[var].notnull().any('time'), "
+                "or add 'threshold' to output_vars.", UserWarning, stacklevel=3)
 
-    units = inten.attrs.get('units', 'degC')
-    meta = {
-        'count': ('Number of events that start in the year', '1'),
-        'days': ('Event days in the calendar year', 'days'),
-        'duration': ('Mean duration of the events that start in the year', 'days'),
-        'intensity_mean': ('Mean of the mean intensities of the events that '
-                           'start in the year', units),
-        'intensity_max': ('Mean of the peak intensities of the events that '
-                          'start in the year', units),
-        'intensity_max_max': ('Largest peak intensity among the events that '
-                              'start in the year', units),
-        'intensity_cumulative': ('Mean of the cumulative intensities of the '
-                                 'events that start in the year', f'{units} days'),
-        'total_icum': ('Total cumulative intensity of the year (' +
-                       ('events counted in their start year'
-                        if cum_by == 'start_year' else
-                        'daily intensities summed within the calendar year') + ')',
-                       f'{units} days'),
-    }
-    for c in _CATEGORY_NAMES:
-        meta[f'{c}_days'] = (f'Event days in category {c} in the calendar year '
-                             '(floor of the severity index)', 'days')
-
+    when = 'month' if freq == 'month' else 'year'
+    meta = _period_meta(inten.attrs.get('units', 'degC'), cum_by, when)
     ds_out = xr.Dataset()
     for name, da in zip(names, results):
         if valid is not None:
             da = da.where(valid)
         long_name, u = meta[name]
-        ds_out[f'{prefix}_{name}'] = da.assign_attrs(long_name=long_name, units=u)
-    ds_out = ds_out.assign_coords(year=np.asarray(years, dtype=np.int32))
+        ds_out[f'{prefix}_{name}'] = da.rename({'__period': dim}).assign_attrs(
+            long_name=long_name, units=u)
+    long_name, u = meta['ndays']
+    ds_out[f'{prefix}_ndays'] = xr.DataArray(ndays, dims=dim).assign_attrs(
+        long_name=long_name, units=u)
+
+    if freq == 'month':
+        starts = pd.to_datetime(pd.DataFrame({'year': keys // 12, 'month': keys % 12 + 1,
+                                             'day': 1}))
+        ds_out = ds_out.assign_coords(
+            time=starts.values, year=('time', (keys // 12).astype(np.int32)),
+            month=('time', (keys % 12 + 1).astype(np.int32)))
+    else:
+        y0 = int(year.min()) + keys * block_length
+        ds_out = ds_out.assign_coords(year=np.asarray(y0, dtype=np.int32))
+        if block_length > 1:
+            ds_out = ds_out.assign_coords(
+                year_end=('year', np.asarray(y0 + block_length - 1, dtype=np.int32)))
     for c in events.coords:
-        if c != 'time' and 'time' not in events[c].dims:
+        if c not in ('time',) and 'time' not in events[c].dims and c not in ds_out.coords:
             ds_out = ds_out.assign_coords({c: events[c]})
-    ds_out.attrs = {k: v for k, v in events.attrs.items()}
-    ds_out.attrs.update(mhw_annual_cum_by=cum_by,
-                        mhw_annual_note=('Event metrics are counted in the year in '
-                                         'which the event starts; days in each '
-                                         'calendar year.'))
+    ds_out.attrs = dict(events.attrs)
+    ds_out.attrs.update({f'mhw_{when}ly_cum_by': f'{cum_by}_{when}',
+                         f'mhw_{when}ly_note': (f'Event metrics are counted in the {when} '
+                                                'in which the event starts; days in each '
+                                                f'calendar {when}.')})
+    if freq != 'month':
+        ds_out.attrs['mhw_block_length_years'] = int(block_length)
     return ds_out
+
+
+_PERIOD_DOC = """
+    Returns
+    -------
+    xr.Dataset
+        On the input grid with ``{dim}`` in place of the daily ``time``. With
+        prefix ``mhw`` (or ``mcs``):
+
+        * ``mhw_count`` — events that start in the {when};
+        * ``mhw_days`` — event days in the calendar {when};
+        * ``mhw_ndays`` — days of the record in the {when} (fewer in a
+          partial first or last {when}; ``mhw_days / mhw_ndays`` is the
+          fraction of days in events);
+        * ``mhw_duration`` — mean duration of the events that start in the
+          {when} (NaN without events);
+        * ``mhw_intensity_mean``, ``mhw_intensity_max``, ``mhw_intensity_var``
+          and ``mhw_intensity_cumulative`` — means over those events of their
+          mean, peak, standard deviation and cumulative intensity;
+        * ``mhw_intensity_max_max`` — the largest peak among them (the most
+          negative for cold spells);
+        * ``mhw_total_icum`` — total cumulative intensity of the {when}, by
+          `cum_by`;
+        * when ``events`` has the threshold and the climatology,
+          ``mhw_intensity_max_relThresh``, ``..._mean_relThresh``,
+          ``..._var_relThresh`` and ``..._cumulative_relThresh`` — the same
+          relative to the threshold;
+        * when ``events`` has ``mhw_rate_onset`` and ``mhw_rate_decline``,
+          their means over the events that start in the {when};
+        * when ``events`` has the severity, ``mhw_moderate_days`` …
+          ``mhw_extreme_days`` — event days in each Hobday et al. (2018)
+          category in the calendar {when} (floor of S: 1, 2, 3, 4 or more).
+          Joined gap days count in ``mhw_days`` but in no category, as in
+          marineHeatWaves.
+"""
+
+_PERIOD_PARAMS = """
+    events : xr.Dataset
+        Output of `xrMHW_events` or `xrMHW_func` with ``mhw_intensity`` (or
+        ``mcs_intensity``). ``*_duration``, if present, marks the event days;
+        ``*_severity`` gives the category days; ``*_threshold`` with
+        ``climatology`` gives the metrics relative to the threshold;
+        ``*_rate_onset`` and ``*_rate_decline`` give the mean rates. Event
+        days are the runs of non-missing values, so the fields must not be
+        subset in time after detection.
+"""
+
+_VALID_PARAM = """
+    valid : xr.DataArray of bool, optional
+        Cells with data, e.g. ``ds['sst'].notnull().any('time')``; the
+        others are NaN. By default the cells where ``*_threshold`` or
+        ``climatology`` is present; without either, every cell counts and a
+        warning says so.
+"""
+
+
+def xrMHW_annual(events, cum_by='start_year', valid=None, block_length=1):
+    if cum_by not in ('start_year', 'calendar_year'):
+        raise ValueError(f"cum_by must be 'start_year' or 'calendar_year', not {cum_by!r}.")
+    return _period_metrics(events, 'year', cum_by.split('_')[0], valid, block_length)
+
+
+xrMHW_annual.__doc__ = """
+    Annual metrics per grid cell from the daily event fields.
+
+    Takes the output of `xrMHW_events` or `xrMHW_func` and returns, for each
+    cell and calendar year (or block of years), the quantities of
+    marineHeatWaves' `blockAverage`: number of events, event days, mean
+    duration, intensities, cumulative intensity and, depending on the input,
+    the metrics relative to the threshold, the onset and decline rates and
+    the days in each category. These are the quantities usually mapped,
+    trended or compared between baselines (Smith et al. 2025, Box 1).
+    Vectorised over the cells and lazy with Dask.
+
+    Parameters
+    ----------""" + _PERIOD_PARAMS + """
+    cum_by : {'start_year', 'calendar_year'}
+        Where the total cumulative intensity (``*_total_icum``) is counted.
+
+        * ``'start_year'`` (default): the whole cumulative intensity of an
+          event goes to the year in which it starts, as stated in
+          marineHeatWaves' `blockAverage`. (Its code puts events that cross
+          a year into the year in which they end.)
+        * ``'calendar_year'``: the daily intensities are summed within each
+          calendar year, so an event that crosses a year is split.
+""" + _VALID_PARAM + """
+    block_length : int
+        Years per block (marineHeatWaves' ``blockLength``), default 1. Blocks
+        start at the first year of the record; ``year`` is the first year of
+        each block and ``year_end`` its last.
+""" + _PERIOD_DOC.format(dim='year', when='year')
+
+
+def xrMHW_monthly(events, cum_by='start_month', valid=None):
+    if cum_by not in ('start_month', 'calendar_month'):
+        raise ValueError(f"cum_by must be 'start_month' or 'calendar_month', not {cum_by!r}.")
+    return _period_metrics(events, 'month', cum_by.split('_')[0], valid)
+
+
+xrMHW_monthly.__doc__ = """
+    Monthly metrics per grid cell from the daily event fields.
+
+    The same quantities as `xrMHW_annual`, for each month of the record:
+    events go to the month in which they start, days to each calendar month.
+    The result has a monthly ``time`` (first day of each month) with ``year``
+    and ``month`` as coordinates, so ``.groupby('month')`` gives the
+    seasonal cycle and `xrMHW_trend` with ``dim='time'`` the trend.
+
+    Parameters
+    ----------""" + _PERIOD_PARAMS + """
+    cum_by : {'start_month', 'calendar_month'}
+        Where the total cumulative intensity is counted: the month in which
+        each event starts (default) or the daily intensities within each
+        calendar month.
+""" + _VALID_PARAM + _PERIOD_DOC.format(dim='time', when='month')
 
 
 # =============================================================================
@@ -1822,13 +2060,6 @@ def xrMHW_annual(events, cum_by='start_year', valid=None):
 # Largest pairwise-difference array built at once (elements); the cells of a
 # block are processed in groups below this size (~256 MB in float64).
 _TREND_MAX_PAIRS = 2 ** 25
-
-
-def _sen_slope(D, dt):
-    """Median of the pairwise slopes, ignoring pairs with a missing value."""
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', RuntimeWarning)  # all-NaN rows
-        return np.nanmedian(D / dt, axis=1)
 
 
 def _mk_variance(X, nv):
@@ -1843,11 +2074,12 @@ def _mk_variance(X, nv):
     return (nv * (nv - 1) * (2 * nv + 5) - tsum) / 18.0
 
 
-def _hamed_rao_factor(X, t, valid, nv, sen, alpha):
+def _hamed_rao_factor(X, t, valid, nv, sen, alpha, lag=None):
     """Variance correction of Hamed & Rao (1998), as in pymannkendall: the
     autocorrelation of the ranks of the Sen-detrended series, keeping the lags
-    outside the confidence band. Missing values are skipped (the valid values
-    are taken in order), and the trend is removed at their true times."""
+    (1 to `lag`, all by default) outside the confidence band. Missing values
+    are skipped (the valid values are taken in order, so the lags count
+    values, not years), and the trend is removed at their true times."""
     from scipy.stats import norm, rankdata
     order = np.argsort(~valid, axis=1, kind='stable')
     Xc = np.take_along_axis(X, order, axis=1)
@@ -1863,7 +2095,8 @@ def _hamed_rao_factor(X, t, valid, nv, sen, alpha):
     with np.errstate(invalid='ignore', divide='ignore'):
         bound = norm.ppf(1 - alpha / 2) / np.sqrt(nv)
         sni = np.zeros(len(X))
-        for k in range(1, X.shape[1]):
+        kmax = X.shape[1] - 1 if lag is None else min(int(lag), X.shape[1] - 1)
+        for k in range(1, kmax + 1):
             acf = (y[:, :-k] * y[:, k:]).sum(axis=1) / acov0
             use = (np.abs(acf) > bound) & (k < nv)
             sni += np.where(use, (nv - k) * (nv - k - 1) * (nv - k - 2) * acf, 0.0)
@@ -1871,20 +2104,45 @@ def _hamed_rao_factor(X, t, valid, nv, sen, alpha):
     return np.where(acov0 > 0, factor, 1.0)
 
 
-def _trend_rows(X, t, method, test, alpha, min_valid):
-    """Slope, p-value and number of valid values for each row of X (m, n)."""
+def _sen_interval(slopes, var, alpha):
+    """Confidence interval of the Sen slope (Sen 1968, eq. 2.6), as
+    ``scipy.stats.theilslopes``: the order statistics of the pairwise slopes
+    at (N -/+ z sqrt(var)) / 2, with `var` the variance of the Mann-Kendall
+    S (corrected for autocorrelation with Hamed-Rao)."""
+    from scipy.stats import norm
+    srt = np.sort(slopes, axis=1)                # NaN pairs go last
+    nt = np.isfinite(srt).sum(axis=1)
+    z = norm.ppf(alpha / 2)                      # negative
+    with np.errstate(invalid='ignore'):
+        sigma = np.sqrt(var)
+        ok = np.isfinite(sigma) & (nt > 0)
+        sigma = np.where(ok, sigma, 0.0)
+        ru = np.minimum(np.round((nt - z * sigma) / 2), nt - 1).astype(np.int64)
+        rl = np.maximum(np.round((nt + z * sigma) / 2) - 1, 0).astype(np.int64)
+    ru, rl = np.clip(ru, 0, None), np.clip(rl, 0, None)
+    lo = np.take_along_axis(srt, rl[:, None], axis=1)[:, 0]
+    hi = np.take_along_axis(srt, ru[:, None], axis=1)[:, 0]
+    return np.where(ok, lo, np.nan), np.where(ok, hi, np.nan)
+
+
+def _trend_rows(X, t, method, test, alpha, min_valid, lag=None):
+    """Slope, p-value, number of valid values and the confidence interval of
+    the slope for each row of X (m, n)."""
     from scipy.stats import norm, t as student_t
     m, n = X.shape
     valid = np.isfinite(X)
     X = np.where(valid, X, np.nan)
     nv = valid.sum(axis=1).astype(np.float64)
-    i, j = np.triu_indices(n, 1)
-    D = X[:, j] - X[:, i]                        # NaN when either value is missing
-    sen = _sen_slope(D, t[j] - t[i]) if (method == 'sen' or test == 'hamed_rao') else None
+    need_pairs = method == 'sen' or test in ('mk', 'hamed_rao')
+    if need_pairs:
+        i, j = np.triu_indices(n, 1)
+        D = X[:, j] - X[:, i]                    # NaN when either value is missing
+        pair_slopes = D / (t[j] - t[i])
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)  # all-NaN rows
+            sen = np.nanmedian(pair_slopes, axis=1)
 
-    if method == 'sen':
-        slope = sen
-    else:
+    if method == 'ols':
         tt = np.where(valid, t, np.nan)
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', RuntimeWarning)
@@ -1893,41 +2151,50 @@ def _trend_rows(X, t, method, test, alpha, min_valid):
         sxx = (dt * dt).sum(axis=1)
         with np.errstate(invalid='ignore', divide='ignore'):
             slope = (dt * dx).sum(axis=1) / sxx
-
-    with np.errstate(invalid='ignore', divide='ignore'):
-        if test is None:
-            p = np.full(m, np.nan)
-        elif test == 't':
             dof = nv - 2
             resid = dx - slope[:, None] * dt
             se = np.sqrt((resid * resid).sum(axis=1) / dof / sxx)
+            half = student_t.ppf(1 - alpha / 2, dof) * se
+        lo, hi = slope - half, slope + half
+    else:
+        slope = sen
+
+    var = None
+    with np.errstate(invalid='ignore', divide='ignore'):
+        if test == 't':
             p = 2 * student_t.sf(np.abs(slope / se), dof)
             p = np.where(se > 0, p, np.where(slope != 0, 0.0, 1.0))
+        elif test is None and method == 'ols':
+            p = np.full(m, np.nan)
         else:
             S = np.nansum(np.sign(D), axis=1)
             var = _mk_variance(X, nv)
             if test == 'hamed_rao':
-                var = var * _hamed_rao_factor(X, t, valid, nv, sen, alpha)
+                var = var * _hamed_rao_factor(X, t, valid, nv, sen, alpha, lag)
             # As pymannkendall: z = 0 when S = 0; a negative corrected
             # variance (possible with Hamed-Rao) gives NaN.
             z = np.where(S == 0, 0.0, (S - np.sign(S)) / np.sqrt(var))
-            p = 2 * (1 - norm.cdf(np.abs(z)))
+            p = 2 * (1 - norm.cdf(np.abs(z))) if test is not None else np.full(m, np.nan)
+    if method == 'sen':
+        lo, hi = _sen_interval(pair_slopes, var, alpha)
     few = nv < max(int(min_valid), 3)
-    return (np.where(few, np.nan, slope), np.where(few, np.nan, p), nv)
+    return tuple(np.where(few, np.nan, v) for v in (slope, p)) + (nv,) + tuple(
+        np.where(few, np.nan, v) for v in (lo, hi))
 
 
-def _trend_block(X, t=(), method='sen', test='mk', alpha=0.05, min_valid=3):
+def _trend_block(X, t=(), method='sen', test='mk', alpha=0.05, min_valid=3, lag=None):
     """Vectorised trends of a block (..., n), in groups of rows that keep the
-    pairwise-difference array below `_TREND_MAX_PAIRS` elements."""
+    pairwise-difference array below `_TREND_MAX_PAIRS` elements. Returns the
+    slope, p-value, number of valid values and the confidence interval."""
     shape = X.shape[:-1]
     n = X.shape[-1]
     X = X.reshape(-1, n).astype(np.float64)
     t = np.asarray(t, dtype=np.float64)
     rows = max(1, _TREND_MAX_PAIRS // max(n * (n - 1) // 2, 1))
-    out = [np.empty(len(X)) for _ in range(3)]
+    out = [np.empty(len(X)) for _ in range(5)]
     for a in range(0, len(X), rows):
         for o, r in zip(out, _trend_rows(X[a:a + rows], t, method, test, alpha,
-                                          min_valid)):
+                                          min_valid, lag)):
             o[a:a + rows] = r
     return tuple(o.reshape(shape) for o in out)
 
@@ -1971,14 +2238,38 @@ def _trend_axis(coord, per):
     return years + 1.0, scale, label
 
 
-def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
-                fdr=None, per='decade', min_valid=3):
-    """
-    Trend, its significance and, optionally, field significance, per grid cell.
+def _fdr_field(p, q, by):
+    """Benjamini-Hochberg over all the cells of `p`, or separately within each
+    value of the dimensions `by` (for example each depth level)."""
+    if not by:
+        return xr.DataArray(np.where(np.isfinite(p.values), _fdr_bh(p.values, q), np.nan),
+                            dims=p.dims, coords=p.coords)
+    core = [d for d in p.dims if d not in by]
 
-    Usually applied to the output of `xrMHW_annual`. The computation is
-    vectorised over each block of cells (no Python loop per cell) and lazy
-    with Dask; the series along `dim` must be whole in each chunk.
+    def per_group(a):
+        return np.where(np.isfinite(a), _fdr_bh(a, q), np.nan)
+
+    if not core:  # one value per group: each is its own field
+        return xr.DataArray(per_group(p.values[..., None])[..., 0], dims=p.dims,
+                            coords=p.coords)
+    return xr.apply_ufunc(per_group, p, input_core_dims=[core], output_core_dims=[core],
+                          vectorize=True).transpose(*p.dims)
+
+
+# Series longer than this make the pairwise methods slow (n(n-1)/2 pairs per cell).
+_TREND_LONG_SERIES = 1500
+
+
+def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
+                fdr=None, fdr_by='auto', per='decade', min_valid=3, lag=None):
+    """
+    Trend, its confidence interval, its significance and, optionally, field
+    significance, per grid cell.
+
+    Usually applied to the output of `xrMHW_annual` or `xrMHW_monthly`. The
+    computation is vectorised over each block of cells (no Python loop per
+    cell) and lazy with Dask; the series along `dim` must be whole in each
+    chunk.
 
     Parameters
     ----------
@@ -1986,8 +2277,8 @@ def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
         Series along `dim`. A Dataset gives the trend of each of its variables
         that has `dim`.
     dim : str
-        Dimension of the series, default ``'year'``. Its coordinate must be
-        numeric (years) or datetime.
+        Dimension of the series, default ``'year'`` (``'time'`` for
+        `xrMHW_monthly`). Its coordinate must be numeric (years) or datetime.
     method : {'sen', 'ols'}
         Slope: Theil-Sen (median of the pairwise slopes; default) or ordinary
         least squares.
@@ -1996,19 +2287,29 @@ def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
           ``pymannkendall.original_test``.
         * ``'hamed_rao'`` — Mann-Kendall with the variance corrected for
           autocorrelation (Hamed & Rao 1998), as
-          ``pymannkendall.hamed_rao_modification_test`` with all lags. When
-          the corrected variance is negative the p-value is NaN, as there
-          (about 1 % of white-noise series of 33 values).
+          ``pymannkendall.hamed_rao_modification_test``. When the corrected
+          variance is negative the p-value and the Sen interval are NaN, as
+          there (about 1 % of white-noise series of 33 values with all lags;
+          ``lag=3`` makes it rarer). With missing values the result differs
+          from pymannkendall, which removes the trend as if the remaining
+          values were consecutive; here it is removed at their true times.
         * ``'t'`` — t-test of the least-squares slope, as
           ``scipy.stats.linregress`` (only with ``method='ols'``).
-        * ``None`` — slope only.
+        * ``None`` — no p-value.
     alpha : float
-        Significance level of ``significant`` (and of the confidence band of
-        the Hamed-Rao correction). Default 0.05.
+        Significance level of ``significant``, of the confidence interval
+        (level ``1 - alpha``) and of the confidence band of the Hamed-Rao
+        correction. Default 0.05.
     fdr : float, optional
         False discovery rate for field significance (Benjamini & Hochberg
-        1995; Wilks 2016 recommends 0.10). It ranks the p-values of the whole
-        field, so it computes them (with Dask, the result is computed).
+        1995; Wilks 2016 recommends 0.10). It ranks the p-values of the
+        field, so it computes the result (with Dask, everything is computed
+        once, together).
+    fdr_by : 'auto', str, sequence of str or None
+        Dimensions within whose values the false discovery rate is applied
+        separately. ``'auto'`` (default): each depth level when there is a
+        ``depth`` dimension, the whole field otherwise. ``None`` or ``[]``:
+        the whole field.
     per : {'decade', 'year'} or float
         Unit of the slope: per decade (default), per year, or per that many
         units of the coordinate.
@@ -2017,13 +2318,25 @@ def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
         Missing values (for example years without events in a mean
         duration) are skipped: the pairs and the variance use the valid
         values of each cell.
+    lag : int, optional
+        Hamed-Rao only: largest lag of the autocorrelation used (all by
+        default, as pymannkendall; Hamed & Rao suggest 3).
 
     Returns
     -------
     xr.Dataset
-        ``slope``, ``p_value``, ``significant`` (p < alpha),
-        ``significant_fdr`` (with `fdr`) and ``n_valid``. For a Dataset input
-        the names are prefixed with each variable's name (``mhw_days_slope``).
+        * ``slope`` — in the units of the data per `per`;
+        * ``slope_low``, ``slope_high`` — confidence interval at level
+          ``1 - alpha``. Theil-Sen: Sen (1968), as
+          ``scipy.stats.theilslopes``, with the variance of the chosen test
+          (corrected for autocorrelation with Hamed-Rao, so that the interval
+          and the p-value agree). Least squares: the t interval;
+        * ``p_value`` and ``significant`` (p < alpha), with a test;
+        * ``significant_fdr``, with `fdr`;
+        * ``n_valid`` — non-missing values along `dim`.
+
+        For a Dataset input the names are prefixed with each variable's name
+        (``mhw_days_slope``).
     """
     if method not in ('sen', 'ols'):
         raise ValueError(f"method must be 'sen' or 'ols', not {method!r}.")
@@ -2033,6 +2346,10 @@ def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
         raise ValueError("test='t' tests the least-squares slope; use method='ols'.")
     if fdr is not None and test is None:
         raise ValueError("fdr needs a test.")
+    if lag is not None and (test != 'hamed_rao' or int(lag) < 1):
+        raise ValueError("lag is a positive integer, used only with test='hamed_rao'.")
+    if not 0 < alpha < 1:
+        raise ValueError(f"alpha must be between 0 and 1, not {alpha!r}.")
     if isinstance(data, xr.Dataset):
         names = [v for v in data.data_vars if dim in data[v].dims]
         if not names:
@@ -2040,52 +2357,82 @@ def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
         parts = []
         for v in names:
             r = xrMHW_trend(data[v], dim=dim, method=method, test=test, alpha=alpha,
-                            fdr=fdr, per=per, min_valid=min_valid)
+                            fdr=fdr, fdr_by=fdr_by, per=per, min_valid=min_valid,
+                            lag=lag)
             parts.append(r.rename({k: f'{v}_{k}' for k in r.data_vars}))
-        out = xr.merge(parts, combine_attrs='drop_conflicts')
-        return out
+        return xr.merge(parts, combine_attrs='drop_conflicts')
     if not isinstance(data, xr.DataArray):
         raise TypeError("`data` must be an xarray.DataArray or Dataset.")
     if dim not in data.dims:
         raise ValueError(f"'{dim}' is not a dimension of the data {data.dims}.")
+    if fdr_by == 'auto':
+        fdr_by = ['depth'] if 'depth' in data.dims else []
+    elif fdr_by is None:
+        fdr_by = []
+    elif isinstance(fdr_by, str):
+        fdr_by = [fdr_by]
+    fdr_by = list(fdr_by)
+    bad = [d for d in fdr_by if d not in data.dims or d == dim]
+    if bad:
+        raise ValueError(f"fdr_by {bad} must be dimensions of the data other than '{dim}'.")
+    n = data.sizes[dim]
+    if (method == 'sen' or test in ('mk', 'hamed_rao')) and n > _TREND_LONG_SERIES:
+        warnings.warn(
+            f"{n} values along '{dim}': Theil-Sen and Mann-Kendall use every pair "
+            f"({n * (n - 1) // 2:,} per cell), which is slow. Consider annual or monthly "
+            "series (xrMHW_annual, xrMHW_monthly), or method='ols' with test='t'.",
+            UserWarning, stacklevel=2)
     if dim not in data.coords:
-        data = data.assign_coords({dim: np.arange(data.sizes[dim])})
+        data = data.assign_coords({dim: np.arange(n)})
     t, scale, label = _trend_axis(data[dim], per)
     if data.chunks is not None:
         data = data.chunk({dim: -1})
 
-    slope, p, nv = xr.apply_ufunc(
+    slope, p, nv, lo, hi = xr.apply_ufunc(
         _trend_block, data,
-        kwargs=dict(t=t, method=method, test=test, alpha=alpha, min_valid=min_valid),
+        kwargs=dict(t=t, method=method, test=test, alpha=alpha, min_valid=min_valid,
+                    lag=lag),
         input_core_dims=[[dim]],
-        output_core_dims=[[], [], []],
+        output_core_dims=[[]] * 5,
         dask='parallelized',
-        output_dtypes=[np.float64] * 3,
+        output_dtypes=[np.float64] * 5,
     )
     units = data.attrs.get('units', '')
     method_txt = {'sen': 'Theil-Sen', 'ols': 'least squares'}[method]
     test_txt = {'mk': 'Mann-Kendall', 'hamed_rao': 'Mann-Kendall, Hamed-Rao correction',
                 't': 't-test of the least-squares slope', None: 'none'}[test]
+    level = f'{100 * (1 - alpha):g} %'
+    unit = f'{units} per {label}'.strip()
     out = xr.Dataset()
     out['slope'] = (slope * scale).assign_attrs(
-        long_name=f'{method_txt} slope per {label}',
-        units=f'{units} per {label}'.strip())
+        long_name=f'{method_txt} slope per {label}', units=unit)
+    ci_txt = ('Sen (1968), variance of the ' + ('Hamed-Rao corrected ' if test == 'hamed_rao'
+                                                else 'Mann-Kendall ') + 'S'
+              if method == 'sen' else 't interval of the least-squares slope')
+    out['slope_low'] = (lo * scale).assign_attrs(
+        long_name=f'Lower bound of the {level} confidence interval of the slope ({ci_txt})',
+        units=unit)
+    out['slope_high'] = (hi * scale).assign_attrs(
+        long_name=f'Upper bound of the {level} confidence interval of the slope ({ci_txt})',
+        units=unit)
     if test is not None:
         out['p_value'] = p.assign_attrs(long_name=f'p-value ({test_txt}, two-sided)',
                                         units='1')
         out['significant'] = (p < alpha).where(p.notnull()).assign_attrs(
             long_name=f'p-value below {alpha}', units='1')
-        if fdr is not None:
-            pv = np.asarray(p.values)
-            out['significant_fdr'] = xr.DataArray(
-                np.where(np.isfinite(pv), _fdr_bh(pv, fdr), np.nan),
-                dims=p.dims, coords=p.coords).assign_attrs(
-                long_name=f'Significant at false discovery rate {fdr} '
-                          '(Benjamini-Hochberg over the field)', units='1')
     out['n_valid'] = nv.assign_attrs(long_name=f'Non-missing values along {dim}',
                                      units='1')
-    out.attrs.update(trend_method=method, trend_test=str(test), trend_alpha=alpha,
-                     trend_per=label, trend_min_valid=int(min_valid))
     if fdr is not None:
-        out.attrs['trend_fdr'] = fdr
+        out = out.compute()                       # one pass over the data
+        where = ('each value of ' + ', '.join(fdr_by)) if fdr_by else 'the whole field'
+        out['significant_fdr'] = _fdr_field(out['p_value'], fdr, fdr_by).assign_attrs(
+            long_name=f'Significant at false discovery rate {fdr} '
+                      f'(Benjamini-Hochberg within {where})', units='1')
+    out.attrs.update(trend_method=method, trend_test=str(test), trend_alpha=alpha,
+                     trend_confidence_level=1 - alpha, trend_per=label,
+                     trend_min_valid=int(min_valid))
+    if lag is not None:
+        out.attrs['trend_hamed_rao_lag'] = int(lag)
+    if fdr is not None:
+        out.attrs.update(trend_fdr=fdr, trend_fdr_by=', '.join(fdr_by) or 'whole field')
     return out

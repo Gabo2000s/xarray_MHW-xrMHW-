@@ -206,42 +206,55 @@ cooler past (Smith et al., Box 1); `detrend_first=True` (the default) avoids it.
 shifting baseline computes one climatology per distinct window: with 60 years of data
 and a 30-year window, its climatology takes about 25 times as long as the fixed one.
 
-### Annual metrics
+### Annual and monthly metrics
 
-`xrMHW_annual` turns the daily event fields into one value per cell and calendar year:
-the quantities of marineHeatWaves' `blockAverage` with one-year blocks. The result is
-small enough to keep in memory even when the detection was not.
+`xrMHW_annual` and `xrMHW_monthly` turn the daily event fields into one value per cell
+and calendar year or month: the quantities of marineHeatWaves' `blockAverage`. Events
+go to the year (month) in which they start; days to each calendar year (month). The
+result is small enough to keep in memory even when the detection was not.
 
 ```python
 ann = xrMHW.xrMHW_annual(mhw)                          # year in place of time
 ann["mhw_days"].mean(("latitude", "longitude")).plot()  # event days per year
+dec = xrMHW.xrMHW_annual(mhw, block_length=10)          # blocks of 10 years
+mon = xrMHW.xrMHW_monthly(mhw)                          # monthly time, with year and month
+mon["mhw_days"].groupby("month").mean()                 # seasonal cycle
 ```
 
 | Variable | Meaning |
 |---|---|
 | `mhw_count` | events that start in the year |
 | `mhw_days` | event days in the calendar year |
+| `mhw_ndays` | days of the record in the year (fewer in a partial first or last year); `mhw_days / mhw_ndays` is the fraction of days in events |
 | `mhw_duration` | mean duration of the events that start in the year |
-| `mhw_intensity_mean`, `mhw_intensity_max`, `mhw_intensity_cumulative` | means over those events of their mean, peak and cumulative intensity |
+| `mhw_intensity_mean`, `mhw_intensity_max`, `mhw_intensity_var`, `mhw_intensity_cumulative` | means over those events of their mean, peak, standard deviation and cumulative intensity |
 | `mhw_intensity_max_max` | largest peak among them |
 | `mhw_total_icum` | total cumulative intensity of the year |
+| `mhw_intensity_max_relThresh` … `mhw_intensity_cumulative_relThresh` | the same intensities relative to the threshold (needs `climatology` and `mhw_threshold` in the input) |
+| `mhw_rate_onset`, `mhw_rate_decline` | mean onset and decline rates (needs `output_vars=[..., "rate_onset", "rate_decline"]` in the detection) |
 | `mhw_moderate_days` … `mhw_extreme_days` | event days in each category in the calendar year (needs `mhw_severity`) |
 
-`cum_by` sets where `mhw_total_icum` counts an event that crosses a year:
+The onset and decline rates are daily fields returned by `xrMHW_func` and
+`xrMHW_events` only when named in `output_vars`, so the default output does not change.
+
+`cum_by` sets where `mhw_total_icum` counts an event that crosses a year (month):
 `"start_year"` (default) puts its whole cumulative intensity in the year it starts, as
-`blockAverage` documents; `"calendar_year"` sums the daily intensities within each year.
-(`blockAverage`'s code puts such an event in the year it ends; every other quantity
-matches it exactly.) Cells without data are NaN when the threshold or the climatology is
-in the input; otherwise pass `valid=`, for example `ds["thetao"].notnull().any("time")`.
+`blockAverage` documents; `"calendar_year"` sums the daily intensities within each year
+(`"start_month"` and `"calendar_month"` for `xrMHW_monthly`). `blockAverage`'s code puts
+such an event in the year it ends; every other quantity, for heatwaves and cold spells
+and with blocks of several years, matches it exactly. Cells without data are NaN when
+the threshold or the climatology is in the input; otherwise pass `valid=`, for example
+`ds["thetao"].notnull().any("time")`, or a warning says that they show zero events.
 
 ### Trends
 
-`xrMHW_trend` gives the trend of each cell along a dimension, usually the `year` of
-`xrMHW_annual`, with its significance and, optionally, field significance:
+`xrMHW_trend` gives the trend of each cell along a dimension (the `year` of
+`xrMHW_annual`, the `time` of `xrMHW_monthly`), with its confidence interval, its
+significance and, optionally, field significance:
 
 ```python
 tr = xrMHW.xrMHW_trend(ann["mhw_days"], method="sen", test="mk", fdr=0.10)
-# slope (per decade), p_value, significant (p < alpha), significant_fdr, n_valid
+# slope (per decade), slope_low, slope_high, p_value, significant, significant_fdr, n_valid
 trs = xrMHW.xrMHW_trend(ann, test="hamed_rao")   # every variable: mhw_days_slope, ...
 ```
 
@@ -249,18 +262,31 @@ trs = xrMHW.xrMHW_trend(ann, test="hamed_rao")   # every variable: mhw_days_slop
 |---|---|
 | `method` | `"sen"` (Theil-Sen, default) or `"ols"` (least squares) |
 | `test` | `"mk"` (Mann-Kendall with tie correction, default), `"hamed_rao"` (corrected for autocorrelation; Hamed & Rao 1998), `"t"` (t-test of the least-squares slope) or `None` |
-| `fdr` | `None` or the false discovery rate of Benjamini-Hochberg over the field (Wilks 2016 recommends 0.10) |
+| `alpha` | significance level and confidence level `1 - alpha` of the interval (default 0.05) |
+| `fdr` | `None` or the false discovery rate of Benjamini-Hochberg (Wilks 2016 recommends 0.10) |
+| `fdr_by` | where the false discovery rate is applied: `"auto"` (default; each `depth` level when there is one, else the whole field), dimension names, or `None` (whole field) |
+| `lag` | Hamed-Rao only: largest autocorrelation lag (all by default; Hamed & Rao suggest 3) |
 | `per` | `"decade"` (default), `"year"` or a number of coordinate units |
 | `min_valid` | cells with fewer non-missing values are NaN |
 
+The confidence interval of the Theil-Sen slope is Sen's (1968), as
+`scipy.stats.theilslopes`, with the variance of the chosen test: with `"hamed_rao"` it
+is widened for autocorrelation like the p-value. For least squares it is the t interval.
+
 Missing values are skipped, so a mean duration with years without events can be trended.
-The results equal `pymannkendall` (`original_test`, `hamed_rao_modification_test`) and
-`scipy.stats` (`theilslopes`, `linregress`, `false_discovery_control`) cell by cell.
-As in `pymannkendall`, the Hamed-Rao p-value is NaN where the corrected variance is
-negative (about 1 % of white-noise series of 33 values). The computation is vectorised
-over each block of cells, about 20 times faster than calling `pymannkendall` per cell,
-and lazy with Dask, except `fdr`, which ranks the p-values of the whole field and so
-computes them.
+Without missing values the results equal `pymannkendall` (`original_test`,
+`hamed_rao_modification_test`, also with `lag`) and `scipy.stats` (`theilslopes` with its
+interval, `linregress`, `false_discovery_control`) cell by cell. With missing values,
+Mann-Kendall and Sen still equal `pymannkendall`, but Hamed-Rao does not: `pymannkendall`
+removes the trend as if the remaining values were consecutive, xrMHW at their true times.
+As in `pymannkendall`, the Hamed-Rao p-value (and the Sen interval) is NaN where the
+corrected variance is negative: about 1.3 % of white-noise series of 33 values with all
+lags, 0.4 % with `lag=3`.
+
+The computation is vectorised over each block of cells and lazy with Dask. With `fdr`
+the p-values of the field are ranked, so the whole result is computed, once. Theil-Sen
+and Mann-Kendall use every pair of values, so they suit annual or monthly series; for
+long daily series use `method="ols", test="t"` (a warning says so).
 
 ## Example notebooks
 

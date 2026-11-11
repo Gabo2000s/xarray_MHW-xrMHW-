@@ -24,6 +24,11 @@ CLIM_PERIOD = (1991, 2020)
 NAMES = ["count", "days", "duration", "intensity_mean", "intensity_max",
          "intensity_max_max", "intensity_cumulative", "total_icum",
          "moderate_days", "strong_days", "severe_days", "extreme_days"]
+ALL_VARS = ["intensity", "severity", "duration", "category", "max_intensity",
+            "cum_intensity", "climatology", "threshold", "rate_onset", "rate_decline"]
+EXTRA = ["intensity_var", "intensity_max_relThresh", "intensity_mean_relThresh",
+         "intensity_var_relThresh", "intensity_cumulative_relThresh",
+         "rate_onset", "rate_decline"]
 
 
 @pytest.fixture(scope="module")
@@ -76,7 +81,8 @@ def against_oliver(series):
     t = np.array([d.toordinal() for d in dates])
     ev, clim = mhw_mod.detect(t, temp.copy(), climatologyPeriod=list(CLIM_PERIOD))
     blk = mhw_mod.blockAverage(t, ev, clim=clim, temp=temp)
-    events = xrMHW.xrMHW_func(_one_cell(dates, temp), "sst", CLIM_PERIOD)
+    events = xrMHW.xrMHW_func(_one_cell(dates, temp), "sst", CLIM_PERIOD,
+                              output_vars=ALL_VARS)
     ann = xrMHW.xrMHW_annual(events).isel(lat=0, lon=0)
     return ev, blk, ann
 
@@ -95,6 +101,12 @@ def test_years_match_blockAverage(against_oliver):
     ("intensity_cumulative", "intensity_cumulative", 1e-3),
     ("moderate_days", "moderate_days", 0), ("strong_days", "strong_days", 0),
     ("severe_days", "severe_days", 0), ("extreme_days", "extreme_days", 0),
+    ("intensity_var", "intensity_var", 1e-4),
+    ("intensity_max_relThresh", "intensity_max_relThresh", 1e-4),
+    ("intensity_mean_relThresh", "intensity_mean_relThresh", 1e-4),
+    ("intensity_var_relThresh", "intensity_var_relThresh", 1e-4),
+    ("intensity_cumulative_relThresh", "intensity_cumulative_relThresh", 1e-3),
+    ("rate_onset", "rate_onset", 1e-4), ("rate_decline", "rate_decline", 1e-4),
 ])
 def test_equals_blockAverage(against_oliver, ours, theirs, atol):
     _, blk, ann = against_oliver
@@ -246,3 +258,117 @@ def test_wrong_inputs(grid):
         xrMHW.xrMHW_annual(events[["mhw_duration"]])
     with pytest.raises(TypeError):
         xrMHW.xrMHW_annual(events["mhw_intensity"])
+    with pytest.raises(ValueError, match="block_length"):
+        xrMHW.xrMHW_annual(events, block_length=0)
+    with pytest.raises(ValueError, match="cum_by"):
+        xrMHW.xrMHW_monthly(events, cum_by="start_year")
+
+
+# ---------------------------------------------------------------- cold spells vs blockAverage
+def test_cold_spells_equal_blockAverage(series):
+    mhw_mod = pytest.importorskip("marineHeatWaves")
+    dates, temp = series
+    t = np.array([d.toordinal() for d in dates])
+    ev, clim = mhw_mod.detect(t, temp.copy(), climatologyPeriod=list(CLIM_PERIOD),
+                              coldSpells=True)
+    blk = mhw_mod.blockAverage(t, ev, clim=clim, temp=temp)
+    events = xrMHW.xrMHW_func(_one_cell(dates, temp), "sst", CLIM_PERIOD,
+                              cold_spells=True, output_vars=ALL_VARS)
+    ann = xrMHW.xrMHW_annual(events).isel(lat=0, lon=0)
+    assert ev["n_events"] > 30
+    pairs = [("count", "count", 0), ("days", "total_days", 0), ("duration", "duration", 0),
+             ("intensity_mean", "intensity_mean", 1e-4),
+             ("intensity_max", "intensity_max", 1e-4),
+             ("intensity_cumulative", "intensity_cumulative", 1e-3),
+             ("moderate_days", "moderate_days", 0), ("strong_days", "strong_days", 0),
+             ("severe_days", "severe_days", 0), ("extreme_days", "extreme_days", 0)]
+    pairs += [(n, n, 1e-3 if "cumulative" in n else 1e-4) for n in EXTRA]
+    for ours, theirs, atol in pairs:
+        a = ann[f"mcs_{ours}"].values
+        b = np.asarray(blk[theirs], dtype=float)
+        assert np.allclose(a, b, atol=atol, rtol=0, equal_nan=True), (
+            ours, np.nanmax(np.abs(a - b)))
+    # blockAverage starts intensity_max_max at 0, so it stays 0 for cold spells;
+    # xrMHW gives the most negative peak.
+    peaks = {}
+    for i in range(ev["n_events"]):
+        peaks.setdefault(ev["date_start"][i].year, []).append(ev["intensity_max"][i])
+    for y, p in peaks.items():
+        assert np.isclose(float(ann["mcs_intensity_max_max"].sel(year=y)), min(p), atol=1e-4)
+
+
+def test_block_length_equals_blockAverage(series):
+    mhw_mod = pytest.importorskip("marineHeatWaves")
+    dates, temp = series
+    t = np.array([d.toordinal() for d in dates])
+    ev, clim = mhw_mod.detect(t, temp.copy(), climatologyPeriod=list(CLIM_PERIOD))
+    blk = mhw_mod.blockAverage(t, ev, clim=clim, temp=temp, blockLength=7)
+    events = xrMHW.xrMHW_func(_one_cell(dates, temp), "sst", CLIM_PERIOD)
+    ann = xrMHW.xrMHW_annual(events, block_length=7).isel(lat=0, lon=0)
+    assert np.array_equal(ann["year"], blk["years_start"].astype(int))
+    assert np.array_equal(ann["year_end"], blk["years_end"].astype(int))
+    for ours, theirs in (("count", "count"), ("days", "total_days"),
+                         ("duration", "duration"), ("intensity_max", "intensity_max"),
+                         ("moderate_days", "moderate_days")):
+        assert np.allclose(ann[f"mhw_{ours}"], np.asarray(blk[theirs], float),
+                           atol=1e-4, equal_nan=True), ours
+    assert list(ann["mhw_ndays"].values[-1:]) == [len(dates[dates.year >= 2019])]
+
+
+# ---------------------------------------------------------------- rates, monthly, engine
+def test_rates_only_when_requested(grid):
+    default = xrMHW.xrMHW_func(grid, "sst", CLIM_PERIOD)
+    assert "mhw_rate_onset" not in default
+    one = xrMHW.xrMHW_func(grid, "sst", CLIM_PERIOD, output_vars=ALL_VARS)
+    clim = xrMHW.xrMHW_clim(grid, "sst", CLIM_PERIOD)
+    two = xrMHW.xrMHW_events(grid, "sst", clim, output_vars=ALL_VARS)
+    for v in one.data_vars:
+        assert np.array_equal(one[v].values, two[v].values, equal_nan=True), v
+    for v in default.data_vars:
+        assert np.array_equal(one[v].values, default[v].values, equal_nan=True), v
+    assert (one["mhw_rate_onset"].notnull() == one["mhw_duration"].notnull()).all()
+
+
+def test_monthly_adds_up_to_annual(grid):
+    events = xrMHW.xrMHW_func(grid, "sst", CLIM_PERIOD, output_vars=ALL_VARS)
+    mon = xrMHW.xrMHW_monthly(events)
+    ann = xrMHW.xrMHW_annual(events)
+    assert mon.sizes["time"] == 12 * 30
+    assert (mon["time"].dt.day == 1).all() and mon["month"].max() == 12
+    for n in ("count", "days", "total_icum", "moderate_days", "extreme_days"):
+        by_year = mon[f"mhw_{n}"].groupby("year").sum("time", skipna=False)
+        assert np.allclose(by_year.transpose(*ann[f"mhw_{n}"].dims).values,
+                           ann[f"mhw_{n}"].values, atol=1e-6, equal_nan=True), n
+    assert int(mon["mhw_ndays"].sel(time="2020-02-01")) == 29
+    cal = xrMHW.xrMHW_monthly(events, cum_by="calendar_month")
+    daily = events["mhw_intensity"].fillna(0).resample(time="MS").sum()
+    assert np.allclose(cal["mhw_total_icum"].isel(lat=0, lon=0),
+                       daily.isel(lat=0, lon=0), atol=1e-3)
+    tr = xrMHW.xrMHW_trend(mon["mhw_days"], dim="time")
+    assert tr["slope"].attrs["units"] == "days per decade"
+
+
+def test_row_groups_and_dask_equal(grid, monkeypatch):
+    pytest.importorskip("dask")
+    events = xrMHW.xrMHW_func(grid, "sst", CLIM_PERIOD, output_vars=ALL_VARS)
+    ref = xrMHW.xrMHW_annual(events)
+    monkeypatch.setattr(xrMHW, "_PERIOD_MAX_ELEMENTS", 2 * events.sizes["time"])
+    grouped = xrMHW.xrMHW_annual(events)
+    lazy = xrMHW.xrMHW_monthly(events.chunk({"lat": 1, "lon": 2}))
+    eager = xrMHW.xrMHW_monthly(events)
+    assert lazy["mhw_count"].chunks is not None
+    for v in ref.data_vars:
+        assert np.array_equal(grouped[v].values, ref[v].values, equal_nan=True), v
+    for v in eager.data_vars:
+        assert np.allclose(lazy[v].values, eager[v].values, equal_nan=True), v
+
+
+def test_warning_without_threshold(grid):
+    events = xrMHW.xrMHW_func(grid, "sst", CLIM_PERIOD)
+    with pytest.warns(UserWarning, match="valid="):
+        xrMHW.xrMHW_annual(events[["mhw_intensity", "mhw_duration"]])
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.simplefilter("error")
+        xrMHW.xrMHW_annual(events[["mhw_intensity"]],
+                           valid=grid["sst"].notnull().any("time"))
