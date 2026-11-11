@@ -272,6 +272,11 @@ trs = xrMHW.xrMHW_trend(ann, test="hamed_rao")   # every variable: mhw_days_slop
 The confidence interval of the Theil-Sen slope is Sen's (1968), as
 `scipy.stats.theilslopes`, with the variance of the chosen test: with `"hamed_rao"` it
 is widened for autocorrelation like the p-value. For least squares it is the t interval.
+With discrete series (event counts, event days with many zero years) many pairwise
+slopes are exactly zero, so the Theil-Sen slope or one bound of its interval can be
+exactly 0 while Mann-Kendall is significant: in the Grand Banks surface layer this
+happens for 28 % of the cells of the annual event count. Report the test, or use
+`method="ols"` for counts.
 
 Missing values are skipped, so a mean duration with years without events can be trended.
 Without missing values the results equal `pymannkendall` (`original_test`,

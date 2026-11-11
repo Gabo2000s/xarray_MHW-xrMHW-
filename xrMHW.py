@@ -2330,7 +2330,10 @@ def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
           ``1 - alpha``. Theil-Sen: Sen (1968), as
           ``scipy.stats.theilslopes``, with the variance of the chosen test
           (corrected for autocorrelation with Hamed-Rao, so that the interval
-          and the p-value agree). Least squares: the t interval;
+          and the p-value agree). Least squares: the t interval. With discrete
+          series (event counts) many pairwise slopes are exactly zero, so the
+          Theil-Sen slope or a bound can be exactly 0 while the test is
+          significant;
         * ``p_value`` and ``significant`` (p < alpha), with a test;
         * ``significant_fdr``, with `fdr`;
         * ``n_valid`` — non-missing values along `dim`.
