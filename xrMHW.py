@@ -656,7 +656,15 @@ def _periodic_clim_1d_wrapper(time_ordinal, temp, windows=(), max_gap_interp=2,
         return np.full((n, _NDOY), np.nan), np.full((n, _NDOY), np.nan)
     _fill_short_gaps(temp, max_gap_interp)
     year, doy = _time_metadata(time_ordinal.astype(int))
-    temp = temp.astype(float)
+    return _window_climatologies(year, doy, temp.astype(float), windows, pctile,
+                                 window_half_width, smooth_pctile, smooth_width)
+
+
+def _window_climatologies(year, doy, temp, windows, pctile, window_half_width,
+                          smooth_pctile, smooth_width):
+    """One fixed climatology per baseline window (n, 366); identical windows
+    are computed once."""
+    n = len(windows)
     seas, thresh = np.empty((n, _NDOY)), np.empty((n, _NDOY))
     done = {}
     for i, w in enumerate(windows):
@@ -666,6 +674,30 @@ def _periodic_clim_1d_wrapper(time_ordinal, temp, windows=(), max_gap_interp=2,
                                       smooth_pctile, smooth_width)
         seas[i], thresh[i] = done[w]
     return seas, thresh
+
+
+def _shifting_clim_1d_wrapper(time_ordinal, temp, windows=(), degree=1, t0=0.0,
+                              max_gap_interp=2, pctile=90, window_half_width=5,
+                              smooth_pctile=True, smooth_width=31):
+    """Shifting baseline with the trend removed first (Smith et al. 2025,
+    recommendation 3e): the polynomial trend of the anomaly over the whole
+    record is removed, one climatology per year is computed from its window,
+    and the trend coefficients are returned so that climatology and
+    threshold follow the trend again when applied to the raw series."""
+    n = len(windows)
+    temp = temp.copy()
+    if np.isnan(temp).all():
+        return (np.full((n, _NDOY), np.nan), np.full((n, _NDOY), np.nan),
+                np.full(degree + 1, np.nan))
+    _fill_short_gaps(temp, max_gap_interp)
+    t_ordinal = time_ordinal.astype(int)
+    year, doy = _time_metadata(t_ordinal)
+    temp = temp.astype(float)
+    coef, offset = _trend_1d(t_ordinal, temp, year, doy, (int(year[0]), int(year[-1])),
+                             degree, t0, window_half_width, smooth_width, smooth_pctile)
+    seas, thresh = _window_climatologies(year, doy, temp - offset, windows, pctile,
+                                         window_half_width, smooth_pctile, smooth_width)
+    return seas, thresh, coef
 
 
 # =============================================================================
@@ -884,11 +916,12 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None,
           normal conditions.
         * **join_method** ({'post-filter', 'pre-filter'}, default
           'post-filter') — order of joining relative to the duration filter.
-    baseline : {'fixed', 'detrended', 'adaptation', 'periodic'}
+    baseline : {'fixed', 'detrended', 'adaptation', 'periodic', 'shifting'}
         Default 'fixed'. Any other baseline (Smith et al. 2025) runs
         `xrMHW_clim` and `xrMHW_events` in turn; its options (``trend``,
         ``degree``, ``rate``, ``ref_length``, ``update_every``) go in
-        `kwargs`. See `xrMHW_clim`.
+        `kwargs` (also ``window``, ``align`` and ``detrend_first`` for
+        'shifting'). See `xrMHW_clim`.
 
     Returns
     -------
@@ -988,6 +1021,8 @@ _BASELINES = {
     'detrended': {'trend': 'linear', 'degree': None},
     'adaptation': {'rate': None},
     'periodic': {'ref_length': 30, 'update_every': 10},
+    'shifting': {'window': 30, 'align': 'lagged', 'detrend_first': True,
+                 'trend': 'linear', 'degree': None},
 }
 
 
@@ -1049,6 +1084,44 @@ def _trend_degree(trend, degree):
     raise ValueError(f"trend must be 'linear' or 'polynomial', not {trend!r}.")
 
 
+def _shifting_windows(years, window, align):
+    """Baseline window of every year of the record. 'lagged': the `window`
+    years before; 'centred': the `window` years around it. A window that leaves
+    the record is moved to the nearest complete one (the first, or for
+    'centred' near the end, the last), which makes those years a fixed
+    baseline (an approximation)."""
+    if align not in ('lagged', 'centred'):
+        raise ValueError(f"align must be 'lagged' or 'centred', not {align!r}.")
+    y0, y1 = int(years.min()), int(years.max())
+    if y1 - y0 + 1 < window:
+        raise ValueError(f"The record ({y0}-{y1}) is shorter than window={window} years.")
+    starts, windows, approx = list(range(y0, y1 + 1)), [], []
+    for y in starts:
+        a = y - window if align == 'lagged' else y - window // 2
+        w = (a, a + window - 1)
+        if w[0] < y0:
+            w = (y0, y0 + window - 1)
+        elif w[1] > y1:
+            w = (y1 - window + 1, y1)
+        if w != (a, a + window - 1):
+            approx.append(y)
+        windows.append(w)
+    return starts, windows, approx
+
+
+def _year_ranges(years):
+    """Compact text for a list of years, e.g. '1961-1990, 2010-2020'."""
+    out, run = [], [years[0]]
+    for y in years[1:]:
+        if y == run[-1] + 1:
+            run.append(y)
+        else:
+            out.append(run)
+            run = [y]
+    out.append(run)
+    return ", ".join(f"{r[0]}-{r[-1]}" if len(r) > 1 else f"{r[0]}" for r in out)
+
+
 def _periodic_windows(years, ref_length, update_every):
     """Period start years and the baseline of each period (WMO practice: the
     reference period is the `ref_length` years before the period). A period
@@ -1088,11 +1161,12 @@ def xrMHW_clim(ds, temp_var_name, clim_period=None, cold_spells=False,
         Name of the temperature variable in `ds`.
     clim_period : tuple of (int, int)
         Start and end years (inclusive) of the reference period, e.g.
-        ``(1991, 2020)``. Required, except for ``baseline='periodic'``.
+        ``(1991, 2020)``. Required, except for the periodic and shifting
+        baselines.
     cold_spells : bool, default False
         Compute the threshold for marine cold spells (10th percentile by
         default) instead of heatwaves (90th).
-    baseline : {'fixed', 'detrended', 'adaptation', 'periodic'}
+    baseline : {'fixed', 'detrended', 'adaptation', 'periodic', 'shifting'}
         How the threshold relates to time (Smith et al. 2025, Prog. Oceanogr.
         231, 103404):
 
@@ -1111,6 +1185,14 @@ def xrMHW_clim(ds, temp_var_name, clim_period=None, cold_spells=False,
           10), as recommended by the WMO: e.g. 2021-2030 uses 1991-2020.
           Periods without a complete reference period before them use the
           first complete one in the record, with a warning.
+        * ``'shifting'`` — the reference period moves every year: with
+          ``align='lagged'`` (default) it is the ``window`` years (default 30)
+          before the year, as in Smith et al.'s examples; ``'centred'`` uses the
+          years around it. Years without a complete window use the nearest
+          complete one in the record, with a warning. With
+          ``detrend_first=True`` (default; Smith et al., recommendation 3e) the
+          trend of the anomaly over the whole record (``trend``, ``degree``) is
+          removed first, so that warming is not read as growing variability.
     **kwargs
         * **pctile** (int/float, default 90, or 10 for cold spells).
         * **window_half_width** (int, default 5) — the window is ``2*w + 1`` days.
@@ -1126,7 +1208,8 @@ def xrMHW_clim(ds, temp_var_name, clim_period=None, cold_spells=False,
         ``climatology`` and ``mhw_threshold`` (``mcs_threshold`` for cold
         spells), float64, with a ``doy`` dimension of length 366 (see
         `xrMHW_doy`) in place of ``time`` (plus ``period`` for the periodic
-        baseline, and ``offset_coef`` for the detrended and adaptation ones).
+        and shifting baselines, and ``offset_coef`` when a trend or a rate
+        moves the threshold).
         The attributes record the baseline and every parameter;
         `xrMHW_events` reads them.
     """
@@ -1139,7 +1222,7 @@ def xrMHW_clim(ds, temp_var_name, clim_period=None, cold_spells=False,
     params = dict(_CLIM_DEFAULTS, **kwargs)
     if params['pctile'] is None:
         params['pctile'] = 10 if cold_spells else 90
-    if baseline != 'periodic' and clim_period is None:
+    if baseline not in ('periodic', 'shifting') and clim_period is None:
         raise ValueError(f"baseline={baseline!r} needs clim_period=(start, end).")
     prefix = 'mcs' if cold_spells else 'mhw'
 
@@ -1186,6 +1269,44 @@ def xrMHW_clim(ds, temp_var_name, clim_period=None, cold_spells=False,
             **common)
         attrs.update(xrMHW_offset_t0=t0, xrMHW_offset_to='both',
                      xrMHW_trend=opts['trend'], xrMHW_trend_degree=degree)
+
+    elif baseline == 'shifting':
+        years = np.asarray(ds.indexes['time'].year)
+        starts, windows, approx = _shifting_windows(years, int(opts['window']),
+                                                    opts['align'])
+        if approx:
+            warnings.warn(
+                f"No complete {opts['window']}-year {opts['align']} window for the "
+                f"years {_year_ranges(approx)}; they use the nearest complete "
+                "window in the record, which makes them a fixed baseline "
+                "(an approximation).", UserWarning, stacklevel=2)
+        sizes = {'period': len(starts), 'doy': _NDOY}
+        if opts['detrend_first']:
+            degree = _trend_degree(opts['trend'], opts['degree'])
+            t_ord = time_ordinal_da.values
+            t0 = 0.5 * (float(t_ord[0]) + float(t_ord[-1]))
+            seas, thresh, coef = xr.apply_ufunc(
+                _shifting_clim_1d_wrapper, time_ordinal_da, da,
+                kwargs={'windows': tuple(windows), 'degree': degree, 't0': t0,
+                        **params},
+                output_core_dims=[['period', 'doy'], ['period', 'doy'], ['coef']],
+                output_dtypes=[np.float64] * 3,
+                dask_gufunc_kwargs={'output_sizes': dict(sizes, coef=degree + 1)},
+                **common)
+            attrs.update(xrMHW_offset_t0=t0, xrMHW_offset_to='both',
+                         xrMHW_trend=opts['trend'], xrMHW_trend_degree=degree)
+        else:
+            seas, thresh = xr.apply_ufunc(
+                _periodic_clim_1d_wrapper, time_ordinal_da, da,
+                kwargs={'windows': tuple(windows), **params},
+                output_core_dims=[['period', 'doy'], ['period', 'doy']],
+                output_dtypes=[np.float64, np.float64],
+                dask_gufunc_kwargs={'output_sizes': sizes}, **common)
+        seas = seas.assign_coords(period=np.asarray(starts, dtype=np.int32))
+        thresh = thresh.assign_coords(period=np.asarray(starts, dtype=np.int32))
+        attrs.update(xrMHW_window=int(opts['window']), xrMHW_align=opts['align'],
+                     xrMHW_detrend_first=int(bool(opts['detrend_first'])),
+                     xrMHW_period_baselines=str(dict(zip(starts, windows))))
 
     else:  # periodic
         years = ds.indexes['time'].year

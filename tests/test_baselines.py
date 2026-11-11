@@ -183,6 +183,89 @@ def test_baselines_with_dask(baseline, opts):
         assert np.array_equal(eager[v].values, lazy[v].values, equal_nan=True), v
 
 
+# ---------------------------------------------------------------- shifting baseline
+def _threshold_years(ds, clim, years):
+    out = xrMHW.xrMHW_events(ds, "sst", clim, output_vars=["threshold"])
+    return out["mhw_threshold"].sel(time=years).values
+
+
+@pytest.mark.parametrize("align,year,window", [
+    ("lagged", "2000", (1970, 1999)),
+    ("lagged", "1965", (1961, 1990)),       # no 30 years before: first complete window
+    ("centred", "1990", (1975, 2004)),
+    ("centred", "2015", (1991, 2020)),      # window leaves the record: last complete one
+])
+def test_shifting_uses_the_window_of_each_year(align, year, window):
+    ds = synthetic("linear", n_lat=1, n_lon=2)
+    with pytest.warns(UserWarning, match="nearest complete window"):
+        clim = xrMHW.xrMHW_clim(ds, "sst", baseline="shifting", align=align,
+                                detrend_first=False)
+    assert clim.sizes["period"] == 60
+    fixed = xrMHW.xrMHW_clim(ds, "sst", window)
+    assert np.array_equal(_threshold_years(ds, clim, year),
+                          _threshold_years(ds, fixed, year))
+
+
+def test_shifting_warning_names_the_approximated_years():
+    ds = synthetic("linear", n_lat=1, n_lon=1)
+    with pytest.warns(UserWarning, match="1961-1990"):
+        xrMHW.xrMHW_clim(ds, "sst", baseline="shifting", detrend_first=False)
+
+
+def test_shifting_detrend_first_equals_detrended_field():
+    """Detrending first and then shifting equals shifting on the field from
+    xrMHW_detrend, with the trend fitted over the whole record."""
+    ds = synthetic("quadratic", amp=3.0, n_lat=2, n_lon=2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        on_raw = xrMHW.xrMHW_events(ds, "sst", xrMHW.xrMHW_clim(
+            ds, "sst", baseline="shifting"))
+        det = xrMHW.xrMHW_detrend(ds, "sst", (1961, 2020))
+        on_det = xrMHW.xrMHW_events(det, "sst", xrMHW.xrMHW_clim(
+            det, "sst", baseline="shifting", detrend_first=False))
+    assert np.array_equal(on_raw["mhw_duration"].notnull().values,
+                          on_det["mhw_duration"].notnull().values)
+    for v in on_raw.data_vars:
+        assert np.allclose(on_raw[v].values, on_det[v].values, atol=1e-5,
+                           equal_nan=True), v
+
+
+def _shifting_frac(ds, **kw):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        clim = xrMHW.xrMHW_clim(ds, "sst", baseline="shifting", **kw)
+    return exceed_by_decade(ds, clim)
+
+
+def test_shifting_without_detrending_exceeds_ten_percent():
+    """Smith et al., Box 1: against a cooler preceding period, warmer years give
+    more than 10 % of days above the threshold, and an accelerating warming makes
+    it grow."""
+    linear = _shifting_frac(synthetic("linear", amp=2.0), detrend_first=False)
+    assert (linear.loc[[1990, 2000, 2010]] > 0.15).all(), linear
+    quadratic = _shifting_frac(synthetic("quadratic", amp=3.0), detrend_first=False)
+    assert quadratic.loc[2010] > quadratic.loc[1990] + 0.10, quadratic
+
+
+def test_shifting_with_detrending_keeps_ten_percent():
+    """Smith et al., recommendation 3e: detrending first, with the right trend
+    shape, keeps about 10 % in every decade."""
+    frac = _shifting_frac(synthetic("quadratic", amp=3.0), trend="polynomial", degree=2)
+    assert frac.between(0.07, 0.13).all(), frac
+
+
+def test_shifting_with_dask():
+    pytest.importorskip("dask")
+    ds = synthetic("linear", n_lat=2, n_lon=2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        eager = xrMHW.xrMHW_func(ds, "sst", None, baseline="shifting")
+        lazy = xrMHW.xrMHW_func(ds.chunk({"time": -1, "lat": 1, "lon": 2}), "sst",
+                                None, baseline="shifting").compute()
+    for v in eager.data_vars:
+        assert np.array_equal(eager[v].values, lazy[v].values, equal_nan=True), v
+
+
 # ---------------------------------------------------------------- errors
 def test_baseline_errors():
     ds = synthetic(n_lat=1, n_lon=1)
@@ -200,3 +283,7 @@ def test_baseline_errors():
         xrMHW.xrMHW_clim(ds.sel(time=slice("1990", "2010")), "sst", baseline="periodic")
     with pytest.raises(TypeError, match="unexpected keyword"):
         xrMHW.xrMHW_clim(ds, "sst", REF, rate=0.1)
+    with pytest.raises(ValueError, match="align must be"):
+        xrMHW.xrMHW_clim(ds, "sst", baseline="shifting", align="leading")
+    with pytest.raises(ValueError, match="shorter than window"):
+        xrMHW.xrMHW_clim(ds, "sst", baseline="shifting", window=70)

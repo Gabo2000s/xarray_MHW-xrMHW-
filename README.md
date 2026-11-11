@@ -188,6 +188,7 @@ results in a warming ocean (Smith et al. 2025, *Prog. Oceanogr.* 231, 103404).
 | `"detrended"` | follows the long-term trend of the anomaly, fitted over the whole record | `trend="linear"` or `"polynomial"` with `degree` |
 | `"adaptation"` | fixed threshold rising at `rate` degC per decade from the centre of the reference period (the climatology stays fixed) | `rate` |
 | `"periodic"` | each period of `update_every` years (10) uses the `ref_length` years (30) before it, as recommended by the WMO | `ref_length`, `update_every` |
+| `"shifting"` | each year uses its own window: the `window` years (30) before it (`align="lagged"`) or around it (`"centred"`); the trend is removed first by default | `window`, `align`, `detrend_first`, `trend`, `degree` |
 
 ```python
 detr = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), baseline="detrended")
@@ -196,9 +197,14 @@ adapt = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), baseline="adaptation", rate
 
 A wrong trend shape gives spurious events: a linear trend removed from a warming that
 accelerates leaves too many events at both ends of the record (Smith et al., Box 1).
-`xrMHW.xrMHW_detrend` returns the detrended field itself. With the periodic baseline,
-periods without a complete reference period before them use the first complete one in
-the record, which makes them a fixed baseline; a warning says which.
+`xrMHW.xrMHW_detrend` returns the detrended field itself. With the periodic and
+shifting baselines, periods or years without a complete reference window use the
+nearest complete one in the record, which makes them a fixed baseline; a warning says
+which. Without detrending, a lagged shifting baseline gives more than 10 % of days
+above the 90th percentile in a warming record, because each year is compared with a
+cooler past (Smith et al., Box 1); `detrend_first=True` (the default) avoids it. The
+shifting baseline computes one climatology per distinct window: with 60 years of data
+and a 30-year window, its climatology takes about 25 times as long as the fixed one.
 
 ## Example notebooks
 
