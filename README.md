@@ -234,6 +234,34 @@ ann["mhw_days"].mean(("latitude", "longitude")).plot()  # event days per year
 matches it exactly.) Cells without data are NaN when the threshold or the climatology is
 in the input; otherwise pass `valid=`, for example `ds["thetao"].notnull().any("time")`.
 
+### Trends
+
+`xrMHW_trend` gives the trend of each cell along a dimension, usually the `year` of
+`xrMHW_annual`, with its significance and, optionally, field significance:
+
+```python
+tr = xrMHW.xrMHW_trend(ann["mhw_days"], method="sen", test="mk", fdr=0.10)
+# slope (per decade), p_value, significant (p < alpha), significant_fdr, n_valid
+trs = xrMHW.xrMHW_trend(ann, test="hamed_rao")   # every variable: mhw_days_slope, ...
+```
+
+| Option | Values |
+|---|---|
+| `method` | `"sen"` (Theil-Sen, default) or `"ols"` (least squares) |
+| `test` | `"mk"` (Mann-Kendall with tie correction, default), `"hamed_rao"` (corrected for autocorrelation; Hamed & Rao 1998), `"t"` (t-test of the least-squares slope) or `None` |
+| `fdr` | `None` or the false discovery rate of Benjamini-Hochberg over the field (Wilks 2016 recommends 0.10) |
+| `per` | `"decade"` (default), `"year"` or a number of coordinate units |
+| `min_valid` | cells with fewer non-missing values are NaN |
+
+Missing values are skipped, so a mean duration with years without events can be trended.
+The results equal `pymannkendall` (`original_test`, `hamed_rao_modification_test`) and
+`scipy.stats` (`theilslopes`, `linregress`, `false_discovery_control`) cell by cell.
+As in `pymannkendall`, the Hamed-Rao p-value is NaN where the corrected variance is
+negative (about 1 % of white-noise series of 33 values). The computation is vectorised
+over each block of cells, about 20 times faster than calling `pymannkendall` per cell,
+and lazy with Dask, except `fdr`, which ranks the p-values of the whole field and so
+computes them.
+
 ## Example notebooks
 
 The [`examples/`](examples/) folder has six short notebooks that run on real data

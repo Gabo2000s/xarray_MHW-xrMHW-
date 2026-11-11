@@ -50,7 +50,8 @@ import xarray as xr
 __version__ = "3.0.0"
 
 __all__ = ["detect_mhw_core", "mhw_1d_wrapper", "xrMHW_func", "xrMHW_clim",
-           "xrMHW_events", "xrMHW_doy", "xrMHW_detrend", "xrMHW_annual"]
+           "xrMHW_events", "xrMHW_doy", "xrMHW_detrend", "xrMHW_annual",
+           "xrMHW_trend"]
 
 # Number of days on the 366-day (leap-year) day-of-year grid.
 _NDOY = 366
@@ -1812,3 +1813,279 @@ def xrMHW_annual(events, cum_by='start_year', valid=None):
                                          'which the event starts; days in each '
                                          'calendar year.'))
     return ds_out
+
+
+# =============================================================================
+# 6. TRENDS
+# =============================================================================
+
+# Largest pairwise-difference array built at once (elements); the cells of a
+# block are processed in groups below this size (~256 MB in float64).
+_TREND_MAX_PAIRS = 2 ** 25
+
+
+def _sen_slope(D, dt):
+    """Median of the pairwise slopes, ignoring pairs with a missing value."""
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)  # all-NaN rows
+        return np.nanmedian(D / dt, axis=1)
+
+
+def _mk_variance(X, nv):
+    """Mann-Kendall variance of S with the tie correction, per row."""
+    m, n = X.shape
+    Xs = np.sort(X, axis=1)                      # NaN go last, each its own group
+    new = np.concatenate([np.ones((m, 1), bool), Xs[:, 1:] != Xs[:, :-1]], axis=1)
+    gid = np.cumsum(new, axis=1) - 1
+    cnt = np.bincount((np.arange(m)[:, None] * n + gid).ravel(),
+                      minlength=m * n).reshape(m, n).astype(np.float64)
+    tsum = (cnt * (cnt - 1) * (2 * cnt + 5)).sum(axis=1)
+    return (nv * (nv - 1) * (2 * nv + 5) - tsum) / 18.0
+
+
+def _hamed_rao_factor(X, t, valid, nv, sen, alpha):
+    """Variance correction of Hamed & Rao (1998), as in pymannkendall: the
+    autocorrelation of the ranks of the Sen-detrended series, keeping the lags
+    outside the confidence band. Missing values are skipped (the valid values
+    are taken in order), and the trend is removed at their true times."""
+    from scipy.stats import norm, rankdata
+    order = np.argsort(~valid, axis=1, kind='stable')
+    Xc = np.take_along_axis(X, order, axis=1)
+    vc = np.take_along_axis(valid, order, axis=1)
+    # Missing values go last as +inf, so they do not change the ranks of the
+    # valid ones (rankdata's nan_policy needs SciPy >= 1.10).
+    d = np.where(vc, Xc - sen[:, None] * t[order], np.inf)
+    ranks = np.where(vc, rankdata(d, axis=1), np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        y = np.nan_to_num(ranks - np.nanmean(ranks, axis=1, keepdims=True))
+    acov0 = (y * y).sum(axis=1)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        bound = norm.ppf(1 - alpha / 2) / np.sqrt(nv)
+        sni = np.zeros(len(X))
+        for k in range(1, X.shape[1]):
+            acf = (y[:, :-k] * y[:, k:]).sum(axis=1) / acov0
+            use = (np.abs(acf) > bound) & (k < nv)
+            sni += np.where(use, (nv - k) * (nv - k - 1) * (nv - k - 2) * acf, 0.0)
+        factor = 1 + 2 * sni / (nv * (nv - 1) * (nv - 2))
+    return np.where(acov0 > 0, factor, 1.0)
+
+
+def _trend_rows(X, t, method, test, alpha, min_valid):
+    """Slope, p-value and number of valid values for each row of X (m, n)."""
+    from scipy.stats import norm, t as student_t
+    m, n = X.shape
+    valid = np.isfinite(X)
+    X = np.where(valid, X, np.nan)
+    nv = valid.sum(axis=1).astype(np.float64)
+    i, j = np.triu_indices(n, 1)
+    D = X[:, j] - X[:, i]                        # NaN when either value is missing
+    sen = _sen_slope(D, t[j] - t[i]) if (method == 'sen' or test == 'hamed_rao') else None
+
+    if method == 'sen':
+        slope = sen
+    else:
+        tt = np.where(valid, t, np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            dt = np.where(valid, t - np.nanmean(tt, axis=1, keepdims=True), 0.0)
+            dx = np.where(valid, X - np.nanmean(X, axis=1, keepdims=True), 0.0)
+        sxx = (dt * dt).sum(axis=1)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            slope = (dt * dx).sum(axis=1) / sxx
+
+    with np.errstate(invalid='ignore', divide='ignore'):
+        if test is None:
+            p = np.full(m, np.nan)
+        elif test == 't':
+            dof = nv - 2
+            resid = dx - slope[:, None] * dt
+            se = np.sqrt((resid * resid).sum(axis=1) / dof / sxx)
+            p = 2 * student_t.sf(np.abs(slope / se), dof)
+            p = np.where(se > 0, p, np.where(slope != 0, 0.0, 1.0))
+        else:
+            S = np.nansum(np.sign(D), axis=1)
+            var = _mk_variance(X, nv)
+            if test == 'hamed_rao':
+                var = var * _hamed_rao_factor(X, t, valid, nv, sen, alpha)
+            # As pymannkendall: z = 0 when S = 0; a negative corrected
+            # variance (possible with Hamed-Rao) gives NaN.
+            z = np.where(S == 0, 0.0, (S - np.sign(S)) / np.sqrt(var))
+            p = 2 * (1 - norm.cdf(np.abs(z)))
+    few = nv < max(int(min_valid), 3)
+    return (np.where(few, np.nan, slope), np.where(few, np.nan, p), nv)
+
+
+def _trend_block(X, t=(), method='sen', test='mk', alpha=0.05, min_valid=3):
+    """Vectorised trends of a block (..., n), in groups of rows that keep the
+    pairwise-difference array below `_TREND_MAX_PAIRS` elements."""
+    shape = X.shape[:-1]
+    n = X.shape[-1]
+    X = X.reshape(-1, n).astype(np.float64)
+    t = np.asarray(t, dtype=np.float64)
+    rows = max(1, _TREND_MAX_PAIRS // max(n * (n - 1) // 2, 1))
+    out = [np.empty(len(X)) for _ in range(3)]
+    for a in range(0, len(X), rows):
+        for o, r in zip(out, _trend_rows(X[a:a + rows], t, method, test, alpha,
+                                          min_valid)):
+            o[a:a + rows] = r
+    return tuple(o.reshape(shape) for o in out)
+
+
+def _fdr_bh(p, q):
+    """Benjamini-Hochberg: True where the p-value passes at false discovery
+    rate `q` over all finite p-values of the field."""
+    p = np.asarray(p, dtype=np.float64)
+    ok = np.isfinite(p)
+    ps = np.sort(p[ok])
+    m = len(ps)
+    passed = ps <= q * np.arange(1, m + 1) / max(m, 1)
+    pmax = ps[passed].max() if passed.any() else -1.0
+    return ok & (p <= pmax)
+
+
+def _trend_axis(coord, per):
+    """Positions along the trend dimension (1 at the first value, in units of
+    the coordinate, or years for dates), the factor that converts a slope per
+    position unit into a slope per `per`, and the label of `per`.
+
+    Starting at 1 makes the Hamed-Rao detrending identical to pymannkendall's
+    (x - k * slope, k = 1..n) for yearly series, ties included."""
+    v = np.asarray(coord.values)
+    if np.issubdtype(v.dtype, np.datetime64):
+        years = (v - v[0]).astype('timedelta64[s]').astype(np.float64) / (365.2425 * 86400)
+        unit = 'year'
+    elif np.issubdtype(v.dtype, np.number):
+        years, unit = v.astype(np.float64) - float(v[0]), None
+    else:
+        raise TypeError(f"The coordinate '{coord.name}' must be numeric (e.g. "
+                        "years) or datetime.")
+    if per == 'decade':
+        scale, label = 10.0, 'decade'
+    elif per == 'year':
+        scale, label = 1.0, 'year'
+    elif isinstance(per, (int, float)) and not isinstance(per, bool) and per > 0:
+        scale, label = float(per), f'{per:g} {unit or "units"}'
+    else:
+        raise ValueError(f"per must be 'decade', 'year' or a positive number, not {per!r}.")
+    return years + 1.0, scale, label
+
+
+def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
+                fdr=None, per='decade', min_valid=3):
+    """
+    Trend, its significance and, optionally, field significance, per grid cell.
+
+    Usually applied to the output of `xrMHW_annual`. The computation is
+    vectorised over each block of cells (no Python loop per cell) and lazy
+    with Dask; the series along `dim` must be whole in each chunk.
+
+    Parameters
+    ----------
+    data : xr.DataArray or xr.Dataset
+        Series along `dim`. A Dataset gives the trend of each of its variables
+        that has `dim`.
+    dim : str
+        Dimension of the series, default ``'year'``. Its coordinate must be
+        numeric (years) or datetime.
+    method : {'sen', 'ols'}
+        Slope: Theil-Sen (median of the pairwise slopes; default) or ordinary
+        least squares.
+    test : {'mk', 'hamed_rao', 't', None}
+        * ``'mk'`` (default) — Mann-Kendall with the tie correction, as
+          ``pymannkendall.original_test``.
+        * ``'hamed_rao'`` — Mann-Kendall with the variance corrected for
+          autocorrelation (Hamed & Rao 1998), as
+          ``pymannkendall.hamed_rao_modification_test`` with all lags. When
+          the corrected variance is negative the p-value is NaN, as there
+          (about 1 % of white-noise series of 33 values).
+        * ``'t'`` — t-test of the least-squares slope, as
+          ``scipy.stats.linregress`` (only with ``method='ols'``).
+        * ``None`` — slope only.
+    alpha : float
+        Significance level of ``significant`` (and of the confidence band of
+        the Hamed-Rao correction). Default 0.05.
+    fdr : float, optional
+        False discovery rate for field significance (Benjamini & Hochberg
+        1995; Wilks 2016 recommends 0.10). It ranks the p-values of the whole
+        field, so it computes them (with Dask, the result is computed).
+    per : {'decade', 'year'} or float
+        Unit of the slope: per decade (default), per year, or per that many
+        units of the coordinate.
+    min_valid : int
+        Cells with fewer non-missing values along `dim` are NaN (at least 3).
+        Missing values (for example years without events in a mean
+        duration) are skipped: the pairs and the variance use the valid
+        values of each cell.
+
+    Returns
+    -------
+    xr.Dataset
+        ``slope``, ``p_value``, ``significant`` (p < alpha),
+        ``significant_fdr`` (with `fdr`) and ``n_valid``. For a Dataset input
+        the names are prefixed with each variable's name (``mhw_days_slope``).
+    """
+    if method not in ('sen', 'ols'):
+        raise ValueError(f"method must be 'sen' or 'ols', not {method!r}.")
+    if test not in ('mk', 'hamed_rao', 't', None):
+        raise ValueError(f"test must be 'mk', 'hamed_rao', 't' or None, not {test!r}.")
+    if test == 't' and method != 'ols':
+        raise ValueError("test='t' tests the least-squares slope; use method='ols'.")
+    if fdr is not None and test is None:
+        raise ValueError("fdr needs a test.")
+    if isinstance(data, xr.Dataset):
+        names = [v for v in data.data_vars if dim in data[v].dims]
+        if not names:
+            raise ValueError(f"No variable of the dataset has the dimension '{dim}'.")
+        parts = []
+        for v in names:
+            r = xrMHW_trend(data[v], dim=dim, method=method, test=test, alpha=alpha,
+                            fdr=fdr, per=per, min_valid=min_valid)
+            parts.append(r.rename({k: f'{v}_{k}' for k in r.data_vars}))
+        out = xr.merge(parts, combine_attrs='drop_conflicts')
+        return out
+    if not isinstance(data, xr.DataArray):
+        raise TypeError("`data` must be an xarray.DataArray or Dataset.")
+    if dim not in data.dims:
+        raise ValueError(f"'{dim}' is not a dimension of the data {data.dims}.")
+    if dim not in data.coords:
+        data = data.assign_coords({dim: np.arange(data.sizes[dim])})
+    t, scale, label = _trend_axis(data[dim], per)
+    if data.chunks is not None:
+        data = data.chunk({dim: -1})
+
+    slope, p, nv = xr.apply_ufunc(
+        _trend_block, data,
+        kwargs=dict(t=t, method=method, test=test, alpha=alpha, min_valid=min_valid),
+        input_core_dims=[[dim]],
+        output_core_dims=[[], [], []],
+        dask='parallelized',
+        output_dtypes=[np.float64] * 3,
+    )
+    units = data.attrs.get('units', '')
+    method_txt = {'sen': 'Theil-Sen', 'ols': 'least squares'}[method]
+    test_txt = {'mk': 'Mann-Kendall', 'hamed_rao': 'Mann-Kendall, Hamed-Rao correction',
+                't': 't-test of the least-squares slope', None: 'none'}[test]
+    out = xr.Dataset()
+    out['slope'] = (slope * scale).assign_attrs(
+        long_name=f'{method_txt} slope per {label}',
+        units=f'{units} per {label}'.strip())
+    if test is not None:
+        out['p_value'] = p.assign_attrs(long_name=f'p-value ({test_txt}, two-sided)',
+                                        units='1')
+        out['significant'] = (p < alpha).where(p.notnull()).assign_attrs(
+            long_name=f'p-value below {alpha}', units='1')
+        if fdr is not None:
+            pv = np.asarray(p.values)
+            out['significant_fdr'] = xr.DataArray(
+                np.where(np.isfinite(pv), _fdr_bh(pv, fdr), np.nan),
+                dims=p.dims, coords=p.coords).assign_attrs(
+                long_name=f'Significant at false discovery rate {fdr} '
+                          '(Benjamini-Hochberg over the field)', units='1')
+    out['n_valid'] = nv.assign_attrs(long_name=f'Non-missing values along {dim}',
+                                     units='1')
+    out.attrs.update(trend_method=method, trend_test=str(test), trend_alpha=alpha,
+                     trend_per=label, trend_min_valid=int(min_valid))
+    if fdr is not None:
+        out.attrs['trend_fdr'] = fdr
+    return out
