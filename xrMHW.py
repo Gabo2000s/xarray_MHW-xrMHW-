@@ -49,7 +49,8 @@ import xarray as xr
 
 __version__ = "3.0.0"
 
-__all__ = ["detect_mhw_core", "mhw_1d_wrapper", "xrMHW_func"]
+__all__ = ["detect_mhw_core", "mhw_1d_wrapper", "xrMHW_func", "xrMHW_clim",
+           "xrMHW_events", "xrMHW_doy"]
 
 # Number of days on the 366-day (leap-year) day-of-year grid.
 _NDOY = 366
@@ -225,80 +226,14 @@ def _bridge_gaps(mask, max_gap):
     return mask
 
 
-# =============================================================================
-# 1. CORE SCIENTIFIC LOGIC (NumPy/pandas based)
-# =============================================================================
+def _climatology_1d(year, doy, temp, clim_period, pctile, window_half_width,
+                    smooth_pctile, smooth_width):
+    """Day-of-year climatology and threshold of one series over its baseline.
 
-def detect_mhw_core(t_ordinal, temp, clim_period=(None, None), pctile=90,
-                    window_half_width=5, smooth_pctile=True, smooth_width=31,
-                    min_duration=5, join_across_gaps=True, max_gap=2,
-                    cold_spells=False, compute_event_metrics=True,
-                    join_method='post-filter'):
+    Returns ``(seas_clim_year, thresh_clim_year)``, two arrays of length 366
+    on the leap-year day-of-year grid. This is the first half of
+    `detect_mhw_core`, unchanged; `xrMHW_clim` calls it on its own.
     """
-    Core detection algorithm for marine heatwaves (or cold spells) on a single
-    1-D time series, following Hobday et al. (2016). Adapted from
-    https://github.com/ecjoliver/marineHeatWaves (Oliver).
-
-    In its default configuration this reproduces the reference implementation
-    to floating-point precision. Gap handling is selectable via `join_method`:
-
-      - 'post-filter' (DEFAULT, = Hobday/Oliver): apply the minimum-duration
-        filter first, then join surviving events separated by <= `max_gap` days.
-      - 'pre-filter' (xrMHW option): join short gaps BEFORE the duration filter,
-        so a fragmented long event survives as one. This is a deliberate,
-        documented departure from Hobday/Oliver, not the default.
-
-    Parameters
-    ----------
-    t_ordinal : np.ndarray
-        Time vector in ordinal format (integers), daily resolution.
-    temp : np.ndarray
-        Temperature vector (1-D).
-    clim_period : tuple
-        (start_year, end_year) for the climatology baseline.
-    pctile : int or float
-        Percentile threshold (90 for MHW, typically 10 for MCS).
-    window_half_width : int
-        Half-width of the climatology window in days (default 5, i.e. 11 days).
-    smooth_pctile : bool
-        Whether to smooth the climatology and threshold (default True).
-    smooth_width : int
-        Width of the moving-average smoothing window in days (default 31).
-    min_duration : int
-        Minimum duration for acceptance of a detected event (default 5 days).
-    join_across_gaps : bool
-        Whether to join events separated by <= `max_gap` days (default True).
-    max_gap : int
-        Maximum gap length in days allowed to join two events (default 2).
-    cold_spells : bool
-        If True, detect marine cold spells (temp < threshold). Default False.
-    compute_event_metrics : bool
-        If False, skip the per-event metric loop and return only the event
-        mask, the climatology, the threshold, the anomaly and the severity.
-        The four per-event arrays are returned as zeros. Use when only the
-        continuous fields are needed; it removes the only Python-level loop
-        that scales with the number of events.
-    join_method : {'post-filter', 'pre-filter'}
-        Order of gap-joining relative to the duration filter (default
-        'post-filter', which matches Hobday/Oliver). See summary above.
-
-    Returns
-    -------
-    tuple of np.ndarray
-        (clim_seas, clim_thresh, anomaly, is_mhw, mhw_duration, mhw_category,
-         mhw_intensity_max, mhw_intensity_cum, mhw_severity)
-
-    Notes
-    -----
-    `mhw_duration` is the *local* persistence of the exceedance in this time
-    series. On a 4-D grid each (lat, lon, depth) cell is independent, so
-    neighbouring cells may report different durations for what is physically
-    one structure. It is not the lifetime of a tracked 3-D object.
-    """
-    T = len(t_ordinal)
-    year, doy = _time_metadata(t_ordinal)
-
-    # --- Climatology -------------------------------------------------------
     if (clim_period[0] is None) or (clim_period[1] is None):
         clim_start, clim_end = year[0], year[-1]
     else:
@@ -314,10 +249,20 @@ def detect_mhw_core(t_ordinal, temp, clim_period=(None, None), pctile=90,
     seas_clim_year, thresh_clim_year = _seasonal_climatology(
         temp, doy, clim_mask, pctile, window_half_width,
         smooth_pctile, smooth_width)
+    return seas_clim_year, thresh_clim_year
 
-    clim_thresh = thresh_clim_year[doy - 1]
-    clim_seas = seas_clim_year[doy - 1]
 
+def _events_1d(temp, clim_seas, clim_thresh, min_duration=5,
+               join_across_gaps=True, max_gap=2, cold_spells=False,
+               compute_event_metrics=True, join_method='post-filter'):
+    """Events of one series against a climatology and threshold given per time step.
+
+    This is the second half of `detect_mhw_core`, unchanged. `clim_seas` and
+    `clim_thresh` have the length of `temp`, so the threshold may vary from
+    one year to the next (any baseline, not only a fixed one).
+    Returns the same 9-tuple as `detect_mhw_core`.
+    """
+    T = len(temp)
     # --- Continuous diagnostics -------------------------------------------
     anomaly = temp - clim_seas
 
@@ -415,6 +360,89 @@ def detect_mhw_core(t_ordinal, temp, clim_period=(None, None), pctile=90,
             mhw_category, mhw_intensity_max, mhw_intensity_cum, severity)
 
 
+
+
+# =============================================================================
+# 1. CORE SCIENTIFIC LOGIC (NumPy/pandas based)
+# =============================================================================
+
+def detect_mhw_core(t_ordinal, temp, clim_period=(None, None), pctile=90,
+                    window_half_width=5, smooth_pctile=True, smooth_width=31,
+                    min_duration=5, join_across_gaps=True, max_gap=2,
+                    cold_spells=False, compute_event_metrics=True,
+                    join_method='post-filter'):
+    """
+    Core detection algorithm for marine heatwaves (or cold spells) on a single
+    1-D time series, following Hobday et al. (2016). Adapted from
+    https://github.com/ecjoliver/marineHeatWaves (Oliver).
+
+    In its default configuration this reproduces the reference implementation
+    to floating-point precision. Gap handling is selectable via `join_method`:
+
+      - 'post-filter' (DEFAULT, = Hobday/Oliver): apply the minimum-duration
+        filter first, then join surviving events separated by <= `max_gap` days.
+      - 'pre-filter' (xrMHW option): join short gaps BEFORE the duration filter,
+        so a fragmented long event survives as one. This is a deliberate,
+        documented departure from Hobday/Oliver, not the default.
+
+    Parameters
+    ----------
+    t_ordinal : np.ndarray
+        Time vector in ordinal format (integers), daily resolution.
+    temp : np.ndarray
+        Temperature vector (1-D).
+    clim_period : tuple
+        (start_year, end_year) for the climatology baseline.
+    pctile : int or float
+        Percentile threshold (90 for MHW, typically 10 for MCS).
+    window_half_width : int
+        Half-width of the climatology window in days (default 5, i.e. 11 days).
+    smooth_pctile : bool
+        Whether to smooth the climatology and threshold (default True).
+    smooth_width : int
+        Width of the moving-average smoothing window in days (default 31).
+    min_duration : int
+        Minimum duration for acceptance of a detected event (default 5 days).
+    join_across_gaps : bool
+        Whether to join events separated by <= `max_gap` days (default True).
+    max_gap : int
+        Maximum gap length in days allowed to join two events (default 2).
+    cold_spells : bool
+        If True, detect marine cold spells (temp < threshold). Default False.
+    compute_event_metrics : bool
+        If False, skip the per-event metric loop and return only the event
+        mask, the climatology, the threshold, the anomaly and the severity.
+        The four per-event arrays are returned as zeros. Use when only the
+        continuous fields are needed; it removes the only Python-level loop
+        that scales with the number of events.
+    join_method : {'post-filter', 'pre-filter'}
+        Order of gap-joining relative to the duration filter (default
+        'post-filter', which matches Hobday/Oliver). See summary above.
+
+    Returns
+    -------
+    tuple of np.ndarray
+        (clim_seas, clim_thresh, anomaly, is_mhw, mhw_duration, mhw_category,
+         mhw_intensity_max, mhw_intensity_cum, mhw_severity)
+
+    Notes
+    -----
+    `mhw_duration` is the *local* persistence of the exceedance in this time
+    series. On a 4-D grid each (lat, lon, depth) cell is independent, so
+    neighbouring cells may report different durations for what is physically
+    one structure. It is not the lifetime of a tracked 3-D object.
+    """
+    year, doy = _time_metadata(t_ordinal)
+    seas_clim_year, thresh_clim_year = _climatology_1d(
+        year, doy, temp, clim_period, pctile, window_half_width,
+        smooth_pctile, smooth_width)
+    return _events_1d(
+        temp, seas_clim_year[doy - 1], thresh_clim_year[doy - 1],
+        min_duration=min_duration, join_across_gaps=join_across_gaps,
+        max_gap=max_gap, cold_spells=cold_spells,
+        compute_event_metrics=compute_event_metrics, join_method=join_method)
+
+
 # =============================================================================
 # 2. ROBUST WRAPPER (NaN handling & vectorisation interface)
 # =============================================================================
@@ -449,11 +477,29 @@ def mhw_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year,
 
     # 1. Fast exit for land / fully masked cells.
     if np.isnan(temp).all():
-        nan_arr = np.full(T, np.nan)
-        return (nan_arr, nan_arr, nan_arr, np.zeros(T, dtype=bool),
-                nan_arr, nan_arr, nan_arr, nan_arr, nan_arr)
+        return _nan_outputs(T)
 
     # 2. Interpolate only short data gaps.
+    _fill_short_gaps(temp, max_gap_interp)
+
+    return detect_mhw_core(
+        time_ordinal.astype(int),
+        temp.astype(float),
+        clim_period=(int(clim_start_year), int(clim_end_year)),
+        **kwargs
+    )
+
+
+def _nan_outputs(T):
+    """The 9-tuple returned for a cell with no data (land, masked)."""
+    nan_arr = np.full(T, np.nan)
+    return (nan_arr, nan_arr, nan_arr, np.zeros(T, dtype=bool),
+            nan_arr, nan_arr, nan_arr, nan_arr, nan_arr)
+
+
+def _fill_short_gaps(temp, max_gap_interp):
+    """Fill, in place, runs of at most `max_gap_interp` missing values by linear
+    interpolation. Longer gaps stay NaN."""
     if np.isnan(temp).any():
         valid_indices = np.flatnonzero(~np.isnan(temp))
         if len(valid_indices) > 1:
@@ -464,13 +510,48 @@ def mhw_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year,
                 x_gap = np.arange(start_idx + 1, end_idx)
                 temp[x_gap] = np.interp(x_gap, [start_idx, end_idx],
                                         [temp[start_idx], temp[end_idx]])
+    return temp
 
-    return detect_mhw_core(
-        time_ordinal.astype(int),
-        temp.astype(float),
-        clim_period=(int(clim_start_year), int(clim_end_year)),
-        **kwargs
-    )
+
+def _clim_1d_wrapper(time_ordinal, temp, clim_start_year, clim_end_year,
+                     max_gap_interp=2, pctile=90, window_half_width=5,
+                     smooth_pctile=True, smooth_width=31):
+    """Climatology and threshold of one cell, on the 366-day grid.
+
+    Same NaN handling as `mhw_1d_wrapper`, so `xrMHW_clim` followed by
+    `xrMHW_events` reproduces `xrMHW_func` exactly.
+    """
+    temp = temp.copy()  # Dask hands over read-only buffers
+    if np.isnan(temp).all():
+        nan366 = np.full(_NDOY, np.nan)
+        return nan366, nan366.copy()
+    _fill_short_gaps(temp, max_gap_interp)
+    t_ordinal = time_ordinal.astype(int)
+    year, doy = _time_metadata(t_ordinal)
+    return _climatology_1d(
+        year, doy, temp.astype(float), (int(clim_start_year), int(clim_end_year)),
+        pctile, window_half_width, smooth_pctile, smooth_width)
+
+
+def _events_1d_wrapper(time_ordinal, temp, seas, thresh, by_doy=True,
+                       max_gap_interp=2, **kwargs):
+    """Events of one cell against a given climatology and threshold.
+
+    `seas` and `thresh` are either on the 366-day grid (``by_doy=True``) or
+    given per time step. Same NaN handling as `mhw_1d_wrapper`.
+    """
+    T = len(time_ordinal)
+    temp = temp.copy()
+    if np.isnan(temp).all():
+        return _nan_outputs(T)
+    _fill_short_gaps(temp, max_gap_interp)
+    if by_doy:
+        _, doy = _time_metadata(time_ordinal.astype(int))
+        seas_t, thresh_t = seas[doy - 1], thresh[doy - 1]
+    else:
+        seas_t, thresh_t = seas, thresh
+    return _events_1d(temp.astype(float), np.asarray(seas_t, dtype=float),
+                      np.asarray(thresh_t, dtype=float), **kwargs)
 
 
 # =============================================================================
@@ -572,6 +653,78 @@ def _resolve_output_vars(output_vars, prefix):
     return resolved
 
 
+def _prepare_input(ds, temp_var_name):
+    """Check the input dataset and put the whole time axis in one chunk."""
+    if not isinstance(ds, xr.Dataset):
+        raise TypeError("`ds` must be an xarray.Dataset "
+                        "(use da.to_dataset() for a DataArray).")
+    if 'time' not in ds.indexes:
+        raise ValueError("Input dataset must have a 'time' coordinate/index.")
+    if temp_var_name not in ds:
+        raise KeyError(f"Variable '{temp_var_name}' not found in the dataset. "
+                       f"Available: {list(ds.data_vars)}")
+
+    # The climatology and the event detection use each cell's complete record,
+    # so apply_ufunc needs the whole time axis in one chunk; without this it
+    # raises a ValueError that does not say what to do.
+    da = ds[temp_var_name]
+    if da.chunks is not None and 'time' in da.dims:
+        t_axis = da.get_axis_num('time')
+        if len(da.chunks[t_axis]) > 1:
+            other = [max(c) for i, c in enumerate(da.chunks) if i != t_axis]
+            new_mib = (da.sizes['time'] * int(np.prod(other))
+                       * np.dtype(da.dtype).itemsize / 2 ** 20)
+            warnings.warn(
+                "xrMHW needs the whole time axis in one chunk (the climatology "
+                "and the event detection use each cell's complete record); "
+                f"rechunking with chunks={{'time': -1}} (~{new_mib:.0f} MiB per "
+                "chunk). To control memory, chunk the input yourself, e.g. "
+                "ds.chunk({'time': -1, 'latitude': 10, 'longitude': 10}).",
+                UserWarning, stacklevel=3)
+            ds = ds.chunk({'time': -1})
+    return ds
+
+
+def _time_ordinal_da(ds):
+    """Ordinal day numbers of the time coordinate, as a DataArray on 'time'."""
+    time_index = ds.indexes['time']
+    try:
+        time_ordinal_np = time_index.map(lambda x: x.toordinal()).values
+    except AttributeError:
+        raise TypeError("Time coordinate must be convertible to ordinal "
+                        "(datetime-like).")
+    return xr.DataArray(time_ordinal_np, coords={'time': ds['time']}, dims='time')
+
+
+def _assemble_outputs(results, ds, prefix, selected):
+    """Mask the per-cell results with the event mask and build the output dataset."""
+    (seas, thresh, anomaly, is_mhw, duration, category,
+     intensity_max, intensity_cum, severity) = results
+
+    available = {
+        f'{prefix}_intensity': (anomaly.where(is_mhw), 'intensity'),
+        f'{prefix}_severity': (severity.where(is_mhw), 'severity'),
+        f'{prefix}_duration': (duration.where(is_mhw), 'duration'),
+        f'{prefix}_category': (category.where(is_mhw), 'category'),
+        f'{prefix}_max_intensity': (intensity_max.where(is_mhw), 'max_intensity'),
+        f'{prefix}_cum_intensity': (intensity_cum.where(is_mhw), 'cum_intensity'),
+        'climatology': (seas, 'climatology'),
+        f'{prefix}_threshold': (thresh, 'threshold'),
+    }
+
+    ds_out = xr.Dataset()
+    for name in selected:
+        data, attr_key = available[name]
+        long_name, units, description = _VAR_ATTRS[attr_key]
+        ds_out[name] = data
+        ds_out[name].attrs.update(long_name=long_name, units=units,
+                                  description=description)
+
+    ds_out = ds_out.assign_coords(ds.coords)
+    ds_out.attrs = dict(ds.attrs)
+    return ds_out
+
+
 def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None, **kwargs):
     """
     Detect marine heatwaves (or cold spells) over an entire xarray Dataset,
@@ -639,40 +792,8 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None, **kwargs):
     exceedance in each individual cell, not the lifetime of a coherent 3-D
     structure; object-level tracking is out of scope for this package.
     """
-    if 'time' not in ds.indexes:
-        raise ValueError("Input dataset must have a 'time' coordinate/index.")
-    if temp_var_name not in ds:
-        raise KeyError(f"Variable '{temp_var_name}' not found in the dataset. "
-                       f"Available: {list(ds.data_vars)}")
-
-    # The climatology and the event detection use each cell's complete record,
-    # so apply_ufunc needs the whole time axis in one chunk; without this it
-    # raises a ValueError that does not say what to do.
-    da = ds[temp_var_name]
-    if da.chunks is not None and 'time' in da.dims:
-        t_axis = da.get_axis_num('time')
-        if len(da.chunks[t_axis]) > 1:
-            other = [max(c) for i, c in enumerate(da.chunks) if i != t_axis]
-            new_mib = (da.sizes['time'] * int(np.prod(other))
-                       * np.dtype(da.dtype).itemsize / 2 ** 20)
-            warnings.warn(
-                "xrMHW needs the whole time axis in one chunk (the climatology "
-                "and the event detection use each cell's complete record); "
-                f"rechunking with chunks={{'time': -1}} (~{new_mib:.0f} MiB per "
-                "chunk). To control memory, chunk the input yourself, e.g. "
-                "ds.chunk({'time': -1, 'latitude': 10, 'longitude': 10}).",
-                UserWarning, stacklevel=2)
-            ds = ds.chunk({'time': -1})
-
-    time_index = ds.indexes['time']
-    try:
-        time_ordinal_np = time_index.map(lambda x: x.toordinal()).values
-    except AttributeError:
-        raise TypeError("Time coordinate must be convertible to ordinal "
-                        "(datetime-like).")
-
-    time_ordinal_da = xr.DataArray(time_ordinal_np,
-                                   coords={'time': ds['time']}, dims='time')
+    ds = _prepare_input(ds, temp_var_name)
+    time_ordinal_da = _time_ordinal_da(ds)
 
     func_kwargs = {'clim_start_year': clim_period[0],
                    'clim_end_year': clim_period[1]}
@@ -702,30 +823,7 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None, **kwargs):
         dask='parallelized',
         output_dtypes=output_dtypes,
     )
-    (seas, thresh, anomaly, is_mhw, duration, category,
-     intensity_max, intensity_cum, severity) = results
-
-    available = {
-        f'{prefix}_intensity': (anomaly.where(is_mhw), 'intensity'),
-        f'{prefix}_severity': (severity.where(is_mhw), 'severity'),
-        f'{prefix}_duration': (duration.where(is_mhw), 'duration'),
-        f'{prefix}_category': (category.where(is_mhw), 'category'),
-        f'{prefix}_max_intensity': (intensity_max.where(is_mhw), 'max_intensity'),
-        f'{prefix}_cum_intensity': (intensity_cum.where(is_mhw), 'cum_intensity'),
-        'climatology': (seas, 'climatology'),
-        f'{prefix}_threshold': (thresh, 'threshold'),
-    }
-
-    ds_out = xr.Dataset()
-    for name in selected:
-        data, attr_key = available[name]
-        long_name, units, description = _VAR_ATTRS[attr_key]
-        ds_out[name] = data
-        ds_out[name].attrs.update(long_name=long_name, units=units,
-                                  description=description)
-
-    ds_out = ds_out.assign_coords(ds.coords)
-    ds_out.attrs = dict(ds.attrs)
+    ds_out = _assemble_outputs(results, ds, prefix, selected)
     ds_out.attrs.update({
         'mhw_detection_period': str(tuple(clim_period)),
         'mhw_type': 'Cold Spell' if func_kwargs['cold_spells'] else 'Heatwave',
@@ -733,6 +831,284 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None, **kwargs):
         'mhw_min_duration_days': func_kwargs.get('min_duration', 5),
         'mhw_max_gap_days': func_kwargs.get('max_gap', 2),
         'mhw_join_method': func_kwargs.get('join_method', 'post-filter'),
+        'mhw_detection_scope': ('pointwise (each grid cell is an independent '
+                                '1-D time series; no spatial object tracking)'),
+        'software': f'xrMHW v{__version__} (Hobday et al. 2016 definition)',
+    })
+    return ds_out
+
+
+# =============================================================================
+# 4. MODULAR API: climatology and events as separate steps
+# =============================================================================
+
+_CLIM_DEFAULTS = dict(pctile=None, window_half_width=5, smooth_pctile=True,
+                      smooth_width=31, max_gap_interp=2)
+_EVENT_DEFAULTS = dict(min_duration=5, join_across_gaps=True, max_gap=2,
+                       join_method='post-filter')
+
+
+def _check_kwargs(kwargs, allowed, func):
+    unknown = sorted(set(kwargs) - set(allowed))
+    if unknown:
+        raise TypeError(f"{func}() got unexpected keyword argument(s) {unknown}. "
+                        f"Allowed: {sorted(allowed)}.")
+
+
+def xrMHW_doy(time):
+    """Day of year on xrMHW's 366-day (leap-year) grid.
+
+    Every year, leap or not, is aligned to the leap-year grid, so 29 February
+    is always day 60 and 1 March always day 61, as in the reference
+    implementation. (The ``dayofyear`` of pandas and xarray gives 60 to
+    1 March in non-leap years.) Use it to index a climatology from
+    `xrMHW_clim` by date, e.g. ``clim.sel(doy=xrMHW_doy(ds.time))``.
+
+    Parameters
+    ----------
+    time : xr.DataArray, pandas.DatetimeIndex or array-like of datetimes
+
+    Returns
+    -------
+    xr.DataArray of int16, named 'doy', with the input 'time' coordinate when
+    `time` is an xarray object.
+    """
+    if isinstance(time, xr.DataArray):
+        values, coords, dims = time.values, {time.dims[0]: time}, time.dims
+    else:
+        values, coords, dims = time, None, ('time',)
+    dates = pd.DatetimeIndex(values)
+    dmap = _leap_doy_map()
+    doy = np.array([dmap[(m, d)] for m, d in zip(dates.month, dates.day)],
+                   dtype=np.int16)
+    da = xr.DataArray(doy, coords=coords, dims=dims, name='doy')
+    da.attrs.update(long_name='day of year on a 366-day (leap-year) grid',
+                    units='1', description='29 February is day 60; 1 March is '
+                    'always day 61.')
+    return da
+
+
+def xrMHW_clim(ds, temp_var_name, clim_period, cold_spells=False, **kwargs):
+    """
+    Seasonal climatology and percentile threshold over a fixed baseline,
+    without detecting events.
+
+    This is the first half of `xrMHW_func`, on its own. Its output can be
+    stored, inspected, reused for several detections, or applied to another
+    dataset or period with `xrMHW_events`. ``xrMHW_events(ds, var,
+    xrMHW_clim(ds, var, clim_period))`` gives exactly the same events as
+    ``xrMHW_func(ds, var, clim_period)``.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Input dataset with a temperature variable and a 'time' coordinate.
+    temp_var_name : str
+        Name of the temperature variable in `ds`.
+    clim_period : tuple of (int, int)
+        Start and end years (inclusive) of the baseline, e.g. ``(1991, 2020)``.
+    cold_spells : bool, default False
+        Compute the threshold for marine cold spells (10th percentile by
+        default) instead of heatwaves (90th).
+    **kwargs
+        * **pctile** (int/float, default 90, or 10 for cold spells).
+        * **window_half_width** (int, default 5) — the window is ``2*w + 1`` days.
+        * **smooth_pctile** (bool, default True) and **smooth_width**
+          (int, default 31) — smoothing of climatology and threshold.
+        * **max_gap_interp** (int, default 2) — longest run of missing values
+          filled by interpolation before the climatology is computed.
+
+    Returns
+    -------
+    xr.Dataset
+        ``climatology`` and ``mhw_threshold`` (``mcs_threshold`` for cold
+        spells), float64, with a ``doy`` dimension of length 366 (see
+        `xrMHW_doy`) in place of ``time``. The attributes record the baseline
+        and every parameter; `xrMHW_events` reads them.
+    """
+    _check_kwargs(kwargs, _CLIM_DEFAULTS, 'xrMHW_clim')
+    params = dict(_CLIM_DEFAULTS, **kwargs)
+    if params['pctile'] is None:
+        params['pctile'] = 10 if cold_spells else 90
+    prefix = 'mcs' if cold_spells else 'mhw'
+
+    ds = _prepare_input(ds, temp_var_name)
+    time_ordinal_da = _time_ordinal_da(ds)
+
+    seas, thresh = xr.apply_ufunc(
+        _clim_1d_wrapper,
+        time_ordinal_da,
+        ds[temp_var_name],
+        kwargs={'clim_start_year': clim_period[0],
+                'clim_end_year': clim_period[1], **params},
+        input_core_dims=[['time'], ['time']],
+        output_core_dims=[['doy'], ['doy']],
+        vectorize=True,
+        dask='parallelized',
+        output_dtypes=[np.float64, np.float64],
+        dask_gufunc_kwargs={'output_sizes': {'doy': _NDOY}},
+    )
+
+    out = xr.Dataset({'climatology': seas, f'{prefix}_threshold': thresh})
+    out = out.assign_coords(doy=np.arange(1, _NDOY + 1, dtype=np.int16))
+    out['doy'].attrs.update(long_name='day of year on a 366-day (leap-year) grid',
+                            units='1',
+                            description='29 February is day 60; 1 March is '
+                            'always day 61 (see xrMHW_doy).')
+    for name, key in (('climatology', 'climatology'),
+                      (f'{prefix}_threshold', 'threshold')):
+        long_name, units, description = _VAR_ATTRS[key]
+        out[name].attrs.update(long_name=long_name, units=units,
+                               description=description)
+    # Keep the coordinates that do not depend on time (lat, lon, depth, ...).
+    out = out.assign_coords({k: v for k, v in ds.coords.items()
+                             if 'time' not in v.dims and k not in out.coords})
+    out.attrs.update({
+        'xrMHW_baseline': 'fixed',
+        'xrMHW_clim_period': str(tuple(clim_period)),
+        'xrMHW_pctile': params['pctile'],
+        'xrMHW_window_half_width': params['window_half_width'],
+        'xrMHW_smooth_pctile': int(bool(params['smooth_pctile'])),
+        'xrMHW_smooth_width': params['smooth_width'],
+        'xrMHW_max_gap_interp': params['max_gap_interp'],
+        'xrMHW_cold_spells': int(bool(cold_spells)),
+        'software': f'xrMHW v{__version__} (Hobday et al. 2016 definition)',
+    })
+    return out
+
+
+def _check_clim(clim, da):
+    """Validate a climatology for `xrMHW_events`; return (threshold name, core dim)."""
+    if not isinstance(clim, xr.Dataset):
+        raise TypeError("`clim` must be an xarray.Dataset, as returned by "
+                        "xrMHW_clim, with 'climatology' and 'mhw_threshold' "
+                        "(or 'mcs_threshold').")
+    thr = [v for v in ('mhw_threshold', 'mcs_threshold') if v in clim]
+    if 'climatology' not in clim or len(thr) != 1:
+        raise ValueError("`clim` must contain 'climatology' and exactly one of "
+                         "'mhw_threshold' or 'mcs_threshold'; found "
+                         f"{list(clim.data_vars)}.")
+    thr = thr[0]
+    dims = set(clim[thr].dims) | set(clim['climatology'].dims)
+    core = [d for d in ('doy', 'time') if d in dims]
+    if len(core) != 1:
+        raise ValueError("The climatology must vary along exactly one of 'doy' "
+                         "(a seasonal cycle, as from xrMHW_clim) or 'time' "
+                         f"(one value per date); it has dims {sorted(dims)}.")
+    core = core[0]
+    if core == 'doy' and clim.sizes['doy'] != _NDOY:
+        raise ValueError(f"'doy' must have length {_NDOY} (the 366-day grid of "
+                         f"xrMHW_doy); it has {clim.sizes['doy']}.")
+    if core == 'time':
+        t_clim = clim['time'].values if 'time' in clim.coords else None
+        if (clim.sizes['time'] != da.sizes['time']
+                or (t_clim is not None and not np.array_equal(t_clim, da['time'].values))):
+            raise ValueError("A climatology given per date must have the same "
+                             "'time' coordinate as the temperature.")
+    for d in dims - {core}:
+        if d not in da.dims:
+            raise ValueError(f"The climatology has dimension '{d}', which the "
+                             f"temperature does not have (its dims: {da.dims}).")
+        if clim.sizes[d] != da.sizes[d]:
+            raise ValueError(f"Dimension '{d}' has size {clim.sizes[d]} in the "
+                             f"climatology and {da.sizes[d]} in the temperature.")
+        if d in clim.coords and d in da.coords and not np.array_equal(
+                clim[d].values, da[d].values):
+            raise ValueError(f"Coordinate '{d}' differs between the climatology "
+                             "and the temperature; they must be on the same grid.")
+    return thr, core
+
+
+def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
+    """
+    Detect marine heatwaves (or cold spells) against a given climatology and
+    threshold.
+
+    This is the second half of `xrMHW_func`, on its own. The climatology can
+    come from `xrMHW_clim` on the same data (the result is then identical to
+    `xrMHW_func`), from another period or dataset, or be built by hand: any
+    threshold that varies with the day of year (dimension ``doy``, length 366,
+    see `xrMHW_doy`) or with the date (dimension ``time``, same as `ds`).
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Input dataset with a temperature variable and a 'time' coordinate.
+    temp_var_name : str
+        Name of the temperature variable in `ds`.
+    clim : xr.Dataset
+        ``climatology`` and ``mhw_threshold`` (heatwaves) or ``mcs_threshold``
+        (cold spells), on the grid of `ds`. Which threshold is present decides
+        what is detected.
+    output_vars : str or sequence of str, optional
+        Which variables to return. ``None`` (default) returns the six event
+        fields; ``'climatology'`` and ``'threshold'`` can be added, expanded
+        to every date.
+    **kwargs
+        * **min_duration** (int, default 5) — minimum event length in days.
+        * **join_across_gaps** (bool, default True) and **max_gap**
+          (int, default 2) — joining of events separated by a brief return to
+          normal conditions.
+        * **join_method** ({'post-filter', 'pre-filter'}, default
+          'post-filter') — order of joining relative to the duration filter.
+        * **max_gap_interp** (int) — longest run of missing values filled by
+          interpolation; by default the value used for `clim`, or 2.
+
+    Returns
+    -------
+    xr.Dataset
+        The same event fields as `xrMHW_func`, on the input grid.
+    """
+    _check_kwargs(kwargs, set(_EVENT_DEFAULTS) | {'max_gap_interp'}, 'xrMHW_events')
+    ds = _prepare_input(ds, temp_var_name)
+    da = ds[temp_var_name]
+    thr_name, core = _check_clim(clim, da)
+    cold_spells = thr_name == 'mcs_threshold'
+    prefix = 'mcs' if cold_spells else 'mhw'
+
+    params = dict(_EVENT_DEFAULTS, **kwargs)
+    max_gap_interp = params.pop('max_gap_interp',
+                                clim.attrs.get('xrMHW_max_gap_interp', 2))
+
+    if output_vars is None:
+        selected = _canonical_outputs(prefix)[:6]
+    else:
+        selected = _resolve_output_vars(output_vars, prefix)
+    metric_names = {f'{prefix}_{f}' for f in _EVENT_METRIC_FIELDS}
+
+    seas, thresh = clim['climatology'], clim[thr_name]
+    if core == 'time':
+        seas = seas.assign_coords(time=da['time'])
+        thresh = thresh.assign_coords(time=da['time'])
+        if seas.chunks is not None:
+            seas, thresh = seas.chunk({'time': -1}), thresh.chunk({'time': -1})
+
+    results = xr.apply_ufunc(
+        _events_1d_wrapper,
+        _time_ordinal_da(ds),
+        da,
+        seas,
+        thresh,
+        kwargs=dict(by_doy=(core == 'doy'), max_gap_interp=int(max_gap_interp),
+                    cold_spells=cold_spells,
+                    compute_event_metrics=bool(metric_names & set(selected)),
+                    **params),
+        input_core_dims=[['time'], ['time'], [core], [core]],
+        output_core_dims=[['time']] * 9,
+        vectorize=True,
+        dask='parallelized',
+        output_dtypes=[np.float32] * 3 + [bool] + [np.float32] * 5,
+    )
+
+    ds_out = _assemble_outputs(results, ds, prefix, selected)
+    ds_out.attrs.update({
+        'mhw_detection_period': clim.attrs.get('xrMHW_clim_period', 'not recorded'),
+        'mhw_baseline': clim.attrs.get('xrMHW_baseline', 'user-supplied'),
+        'mhw_type': 'Cold Spell' if cold_spells else 'Heatwave',
+        'mhw_percentile': clim.attrs.get('xrMHW_pctile', 'not recorded'),
+        'mhw_min_duration_days': params['min_duration'],
+        'mhw_max_gap_days': params['max_gap'],
+        'mhw_join_method': params['join_method'],
         'mhw_detection_scope': ('pointwise (each grid cell is an independent '
                                 '1-D time series; no spatial object tracking)'),
         'software': f'xrMHW v{__version__} (Hobday et al. 2016 definition)',

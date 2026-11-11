@@ -158,6 +158,26 @@ rather than after it (a documented departure from the standard definition):
 joined = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), join_method="pre-filter")
 ```
 
+**Climatology and events as two steps.** `xrMHW_clim` computes the seasonal
+climatology and threshold on a 366-day `doy` axis; `xrMHW_events` applies a
+threshold to a temperature field. Together they give exactly what `xrMHW_func` gives,
+and they let you store a climatology, reuse it for several detections, or apply it to
+another period or dataset:
+
+```python
+clim = xrMHW.xrMHW_clim(ds, "thetao", (1993, 2022))      # dims (..., doy)
+clim.to_netcdf("climatology_1993-2022.nc")
+
+mhw = xrMHW.xrMHW_events(ds, "thetao", clim)              # same events as xrMHW_func
+new = xrMHW.xrMHW_events(ds_2023, "thetao", clim)         # new data, same baseline
+```
+
+The threshold can also be built by hand, per day of year (`doy`, length 366, see
+`xrMHW.xrMHW_doy`) or per date (`time`). Which threshold variable it holds,
+`mhw_threshold` or `mcs_threshold`, decides whether heatwaves or cold spells are
+detected. Running the two steps reads the data twice, so for a single analysis
+`xrMHW_func` is faster.
+
 ## Example notebooks
 
 The [`examples/`](examples/) folder has six short notebooks that run on real data
