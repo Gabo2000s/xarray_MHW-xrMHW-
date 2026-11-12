@@ -295,7 +295,7 @@ long daily series use `method="ols", test="t"` (a warning says so).
 
 ## Example notebooks
 
-The [`examples/`](examples/) folder has six short notebooks that run on real data
+The [`examples/`](examples/) folder has seven short notebooks that run on real data
 downloaded automatically from Zenodo
 ([10.5281/zenodo.22909109](https://doi.org/10.5281/zenodo.22909109)):
 
@@ -307,6 +307,7 @@ downloaded automatically from Zenodo
 | [03 · Subsurface marine heatwaves](examples/03_subsurface_4D.ipynb) | Profiles, depth–time diagrams, sections, events hidden below the surface, 3-D view |
 | [04 · Many files, Dask and Zarr](examples/04_many_files_and_scaling.ipynb) | `open_mfdataset`, chunk planning from memory, a local cluster, Zarr output |
 | [05 · Troubleshooting](examples/05_troubleshooting.ipynb) | Common errors and silent pitfalls, with fixes |
+| [06 · Choosing a baseline](examples/06_baselines.ipynb) | The five baselines of Smith et al. (2025) on a synthetic warming series and on a GLORYS cell; annual and monthly metrics and trends with confidence intervals |
 
 Install their extra dependencies with `pip install ".[examples]"` or with the conda
 environment in [`examples/environment.yml`](examples/environment.yml).
