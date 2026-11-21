@@ -17,3 +17,4 @@ examples/xrmhw_outputs/
 
 # Local tools and working files, not part of the package
 .qodo/
+other outputs/
