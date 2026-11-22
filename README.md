@@ -5,7 +5,7 @@ A parallel, out-of-core Python implementation of the marine heatwave (MHW) defin
 N-dimensional ocean grids (time × latitude × longitude × **depth**).
 
 [![Tests](https://github.com/Gabo2000s/xarray_MHW-xrMHW-/actions/workflows/tests.yml/badge.svg)](https://github.com/Gabo2000s/xarray_MHW-xrMHW-/actions/workflows/tests.yml)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18476144.svg)](https://doi.org/10.5281/zenodo.18476144)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18343767.svg)](https://doi.org/10.5281/zenodo.18343767)
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
 ![License](https://img.shields.io/badge/License-GPL--3.0-green)
 
@@ -393,10 +393,11 @@ test requirements.
 
 ## How to cite
 
-If xrMHW contributes to work you publish, please cite the archived release:
+If xrMHW contributes to work you publish, please cite the archived software (the DOI below
+always resolves to the latest version; Zenodo also lists a DOI for each version):
 
 > Gutiérrez-Cárdenas, G. S. (2026). *xrMHW: A High-Performance Multidimensional Marine
-> Heatwave Detector* (v2.0.0). Zenodo. https://doi.org/10.5281/zenodo.18476144
+> Heatwave Detector*. Zenodo. https://doi.org/10.5281/zenodo.18343767
 
 and the definition it implements (Hobday et al., 2016). Please also consider citing
 Oliver's `marineHeatWaves`, from which the detection logic is adapted.
