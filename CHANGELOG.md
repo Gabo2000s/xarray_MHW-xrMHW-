@@ -27,7 +27,8 @@ concept DOI [10.5281/zenodo.18343767](https://doi.org/10.5281/zenodo.18343767).
 ### Changed
 - A time axis decoded with cftime in the standard calendar is now accepted; any other
   calendar (`noleap`, `360_day`, `julian`, …) raises a clear `ValueError`. Previously a
-  `noleap` axis returned no events without an error.
+  `noleap` axis was processed without any error, with its dates misread as Gregorian,
+  and a cftime axis in the standard calendar failed with a misleading message.
 - Python 3.10–3.13 (Python 3.9 is past end of life). CI runs on every pull request.
 
 ### Unchanged
@@ -65,7 +66,8 @@ See "Upgrading from v2.x" in the README.
 
 ### Changed
 - The climatology smoothing wraps around the year (circular running mean).
-- License changed to GPL-3.0.
+- The license header of `xrMHW.py` now says GPL-3.0, matching the LICENSE file (it
+  still said MIT in 1.0.0).
 
 ## [1.0.0] — 2026-01-22
 

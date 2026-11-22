@@ -1,7 +1,8 @@
 """Calendar handling: only the standard (Gregorian) calendar is supported.
 
-Before this check, a 'noleap' time axis returned no events without any error,
-and a cftime axis in the standard calendar was read with wrong years.
+Before this check, a 'noleap' time axis was processed without any error, with
+its dates misread as Gregorian, and a cftime axis in the standard calendar was
+read with wrong years and failed with a misleading message.
 """
 import numpy as np
 import pytest
