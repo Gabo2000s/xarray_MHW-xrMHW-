@@ -12,7 +12,7 @@ requires-python = ">=3.9"
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [
-    {name = "G. S. Gutiérrez-Cárdenas", email = "gabriels.gutierrezc17@gmail.com"}
+    {name = "G. S. Gutiérrez-Cárdenas", email = "ggutierrezca@mun.ca"}
 ]
 keywords = ["oceanography", "marine heatwaves", "climate science", "xarray", "dask"]
 classifiers = [
