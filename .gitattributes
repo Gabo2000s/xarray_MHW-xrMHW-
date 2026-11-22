@@ -1,0 +1,3 @@
+# GitHub language statistics: count the example notebooks as documentation,
+# so the repository is shown as a Python project.
+*.ipynb linguist-documentation
