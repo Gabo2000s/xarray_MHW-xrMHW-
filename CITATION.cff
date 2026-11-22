@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use xrMHW, please cite it as below."
+type: software
+title: "xrMHW: A High-Performance Multidimensional Marine Heatwave Detector"
+abstract: >-
+  Parallel, out-of-core detection of surface and subsurface marine heatwaves and
+  cold spells on xarray datasets, following Hobday et al. (2016).
+authors:
+  - family-names: "Gutiérrez-Cárdenas"
+    given-names: "Gabriel S."
+    orcid: "https://orcid.org/0000-0002-3915-7684"
+version: "3.1.0"
+doi: "10.5281/zenodo.18343767"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.18343767"
+    description: "Concept DOI: all versions on Zenodo"
+repository-code: "https://github.com/Gabo2000s/xarray_MHW-xrMHW-"
+license: GPL-3.0-only
+keywords:
+  - oceanography
+  - marine heatwaves
+  - climate extremes
+  - xarray
+  - dask

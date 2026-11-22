@@ -538,10 +538,14 @@ test requirements.
 
 ## How to cite
 
-If xrMHW contributes to work you publish, please cite the archived release:
+If xrMHW contributes to work you publish, please cite the archived software (the DOI
+below always resolves to the latest version; Zenodo also lists a DOI for each version):
 
 > Gutiérrez-Cárdenas, G. S. (2026). *xrMHW: A High-Performance Multidimensional Marine
-> Heatwave Detector* (v2.0.0). Zenodo. https://doi.org/10.5281/zenodo.18476144
+> Heatwave Detector*. Zenodo. https://doi.org/10.5281/zenodo.18343767
+
+GitHub's "Cite this repository" button gives the same reference from
+[CITATION.cff](CITATION.cff).
 
 and the definition it implements (Hobday et al., 2016). Please also consider citing
 Oliver's `marineHeatWaves`, from which the detection logic is adapted.

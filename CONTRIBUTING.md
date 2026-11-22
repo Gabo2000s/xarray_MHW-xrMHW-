@@ -4,6 +4,30 @@ Thank you for your interest in contributing to `xrMHW`! We welcome contributions
 
 As a scientific package, maintaining numerical reproducibility and computational efficiency is our priority.
 
+## Getting help
+
+* **Questions about usage** (how to chunk a dataset, which baseline to choose, how to read
+  an output): open an issue on the
+  [issue tracker](https://github.com/Gabo2000s/xarray_MHW-xrMHW-/issues) with the label
+  `question`. Include the code you ran and, if possible, a small dataset or the output of
+  `print(ds)`.
+* **Start with the examples:** the notebooks in [`examples/`](examples/) cover a single
+  time series, sea-surface and depth-resolved grids, many files, baselines and
+  troubleshooting (`05_troubleshooting.ipynb`).
+
+## Support and maintenance
+
+xrMHW is maintained by G. S. Gutiérrez-Cárdenas as part of research at the Fisheries and
+Marine Institute of Memorial University of Newfoundland. Issues and pull requests are
+answered on a best-effort basis, normally within two weeks. Bug reports that affect
+numerical results take priority. Releases are tagged on GitHub and archived on Zenodo;
+changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+## Code of conduct
+
+Everyone taking part in the project is expected to follow the
+[code of conduct](CODE_OF_CONDUCT.md).
+
 ## How to Contribute
 
 ### 1. Reporting Issues
