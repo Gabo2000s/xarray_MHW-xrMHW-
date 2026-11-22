@@ -29,13 +29,18 @@ concept DOI [10.5281/zenodo.18343767](https://doi.org/10.5281/zenodo.18343767).
   calendar (`noleap`, `360_day`, `julian`, …) raises a clear `ValueError`. Previously a
   `noleap` axis was processed without any error, with its dates misread as Gregorian,
   and a cftime axis in the standard calendar failed with a misleading message.
-- Python 3.10–3.13 (Python 3.9 is past end of life). CI runs on every pull request.
+- CI also covers Python 3.13, runs on every pull request and installs `pymannkendall`
+  and `cftime`, so the independent trend checks and the calendar tests run.
+- `CITATION.cff`, `CHANGELOG.md` and a code of conduct; "Getting help" and a support
+  statement in CONTRIBUTING.
 
 ### Unchanged
 - `xrMHW_func` with the fixed baseline, `detect_mhw_core` and `mhw_1d_wrapper` give the
   same results as in 3.0.0.
 
-## [3.0.0] — unreleased
+## [3.0.0] — 2026-11-22
+
+Archived as [10.5281/zenodo.24432046](https://doi.org/10.5281/zenodo.24432046).
 
 ### Added
 - Severity index `{prefix}_severity`, returned by default.
@@ -47,8 +52,10 @@ concept DOI [10.5281/zenodo.18343767](https://doi.org/10.5281/zenodo.18343767).
   and the performance figure.
 - A time axis split over several Dask chunks is rechunked with a warning instead of
   failing.
+- Four software authors and Zenodo metadata (`.zenodo.json`).
 
 ### Changed (results may differ from 2.x)
+- Python 3.10 or later (Python 3.9 is past end of life); CI on Python 3.10–3.12.
 - `threshold` is renamed `{prefix}_threshold`; `detect_mhw_core` and `mhw_1d_wrapper`
   return nine arrays (severity last).
 - The climatology pools consecutive calendar days around each occurrence, as the
