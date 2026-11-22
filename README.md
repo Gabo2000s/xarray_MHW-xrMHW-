@@ -6,7 +6,7 @@ N-dimensional ocean grids (time × latitude × longitude × **depth**).
 
 [![Tests](https://github.com/Gabo2000s/xarray_MHW-xrMHW-/actions/workflows/tests.yml/badge.svg)](https://github.com/Gabo2000s/xarray_MHW-xrMHW-/actions/workflows/tests.yml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18343767.svg)](https://doi.org/10.5281/zenodo.18343767)
-![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/License-GPL--3.0-green)
 
 Developed by Gabriel S. Gutiérrez-Cárdenas ([ORCID 0000-0002-3915-7684](https://orcid.org/0000-0002-3915-7684)),
@@ -107,8 +107,8 @@ For development, including the test dependencies:
 pip install -e ".[test]"
 ```
 
-Requires Python ≥ 3.9. Dependencies (`xarray`, `dask`, `netCDF4`, `scipy`, `pandas`,
-`numpy`) are installed automatically; the CI matrix covers Python 3.9, 3.10 and 3.11.
+Requires Python ≥ 3.10. Dependencies (`xarray`, `dask`, `netCDF4`, `scipy`, `pandas`,
+`numpy`) are installed automatically; the CI matrix covers Python 3.10, 3.11 and 3.12.
 
 ## Quick start
 
