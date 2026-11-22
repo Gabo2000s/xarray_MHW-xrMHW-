@@ -51,9 +51,18 @@ Other limitations:
 
 - **Daily resolution.** The climatology windows and the minimum-duration filter are
   defined in days.
-- **Standard calendars only.** The time coordinate must be convertible with
-  `.toordinal()`; `cftime` calendars (`noleap`, `360_day`) raise a `TypeError`. Convert
-  the calendar before calling xrMHW.
+- **Standard calendar only.** The 366-day climatology grid assumes the Gregorian
+  calendar. A time axis decoded with `cftime` in the standard calendar is accepted; any
+  other calendar (`noleap`, `365_day`, `360_day`, `julian`, …) raises a `ValueError`.
+  Model output in those calendars can be converted first:
+
+  ```python
+  ds = ds.convert_calendar("standard", align_on="year", missing=np.nan)
+  ```
+
+  Days that do not exist in the original calendar (29 February, or the days a
+  `360_day` calendar skips) become NaN, and gaps of up to `max_gap_interp` days are
+  interpolated.
 - **No spatial aggregation.** Regional averages, event catalogues and composites are
   left to the user's downstream analysis.
 

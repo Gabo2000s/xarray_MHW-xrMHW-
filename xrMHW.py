@@ -886,9 +886,33 @@ def _prepare_input(ds, temp_var_name):
     return ds
 
 
+_STANDARD_CALENDARS = ('standard', 'gregorian', 'proleptic_gregorian')
+
+
 def _time_ordinal_da(ds):
-    """Ordinal day numbers of the time coordinate, as a DataArray on 'time'."""
+    """Ordinal day numbers of the time coordinate, as a DataArray on 'time'.
+
+    Only the standard (Gregorian) calendar is supported. A time axis decoded
+    with cftime in that calendar is converted to pandas datetimes; any other
+    calendar raises a ValueError, because the 366-day climatology grid and
+    the day counts assume the Gregorian calendar.
+    """
     time_index = ds.indexes['time']
+    calendar = getattr(time_index, 'calendar', None)
+    if calendar is not None:
+        if calendar not in _STANDARD_CALENDARS:
+            raise ValueError(
+                f"The time coordinate uses the {calendar!r} calendar; xrMHW "
+                "supports only the standard (Gregorian) calendar. Convert the "
+                "dataset first, for example with "
+                "ds.convert_calendar('standard', align_on='year', missing=np.nan) "
+                "(align_on is needed for '360_day'). Days that do not exist in "
+                "the original calendar become NaN, and gaps of up to "
+                "max_gap_interp days are interpolated.")
+        try:
+            time_index = time_index.to_datetimeindex(time_unit='ns')
+        except TypeError:  # xarray before 2025.01 has no time_unit
+            time_index = time_index.to_datetimeindex()
     try:
         time_ordinal_np = time_index.map(lambda x: x.toordinal()).values
     except AttributeError:
