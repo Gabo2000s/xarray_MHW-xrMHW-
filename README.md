@@ -399,8 +399,9 @@ test requirements.
 If xrMHW contributes to work you publish, please cite the archived software (the DOI below
 always resolves to the latest version; Zenodo also lists a DOI for each version):
 
-> Gutiérrez-Cárdenas, G. S. (2026). *xrMHW: A High-Performance Multidimensional Marine
-> Heatwave Detector*. Zenodo. https://doi.org/10.5281/zenodo.18343767
+> Gutiérrez-Cárdenas, G. S., Cyr, F., Oliver, E. C. J., & Soontiens, N. (2026). *xrMHW:
+> parallel, out-of-core detection of surface and subsurface marine heatwaves*. Zenodo.
+> https://doi.org/10.5281/zenodo.18343767
 
 and the definition it implements (Hobday et al., 2016). Please also consider citing
 Oliver's `marineHeatWaves`, from which the detection logic is adapted.
