@@ -1,0 +1,38 @@
+{
+  "title": "xrMHW: parallel, out-of-core detection of surface and subsurface marine heatwaves",
+  "upload_type": "software",
+  "description": "<p>xrMHW applies the marine heatwave definition of Hobday et al. (2016) to every cell of gridded ocean datasets, from a single time series to (time, depth, latitude, longitude) fields. Built on xarray and Dask, it processes datasets larger than available memory chunk by chunk and returns the daily intensity, severity, duration, category and cumulative intensity on the input grid. Its results are validated against the reference implementation marineHeatWaves.</p>",
+  "creators": [
+    {
+      "name": "Gutiérrez-Cárdenas, Gabriel S.",
+      "affiliation": "Centre for Fisheries Ecosystems Research, Fisheries and Marine Institute of Memorial University of Newfoundland, St. John's, NL, Canada",
+      "orcid": "0000-0002-3915-7684"
+    },
+    {
+      "name": "Cyr, Frédéric",
+      "affiliation": "Centre for Fisheries Ecosystems Research, Fisheries and Marine Institute of Memorial University of Newfoundland, St. John's, NL, Canada",
+      "orcid": "0000-0002-1581-7502"
+    },
+    {
+      "name": "Oliver, Eric C. J.",
+      "affiliation": "Department of Oceanography, Dalhousie University, Halifax, NS, Canada",
+      "orcid": "0000-0002-4006-2826"
+    },
+    {
+      "name": "Soontiens, Nancy",
+      "affiliation": "Northwest Atlantic Fisheries Centre, Fisheries and Oceans Canada, St. John's, NL, Canada",
+      "orcid": "0000-0003-2880-8717"
+    }
+  ],
+  "version": "3.0.0",
+  "license": "gpl-3.0-only",
+  "access_right": "open",
+  "keywords": [
+    "oceanography",
+    "marine heatwaves",
+    "climate extremes",
+    "xarray",
+    "dask",
+    "Python"
+  ]
+}

@@ -9,7 +9,10 @@ N-dimensional ocean grids (time × latitude × longitude × **depth**).
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
 ![License](https://img.shields.io/badge/License-GPL--3.0-green)
 
-Developed by Gabriel S. Gutiérrez-Cárdenas ([ORCID 0000-0002-3915-7684](https://orcid.org/0000-0002-3915-7684)).
+Developed by Gabriel S. Gutiérrez-Cárdenas ([ORCID 0000-0002-3915-7684](https://orcid.org/0000-0002-3915-7684)),
+with Frédéric Cyr ([ORCID 0000-0002-1581-7502](https://orcid.org/0000-0002-1581-7502)),
+Eric C. J. Oliver ([ORCID 0000-0002-4006-2826](https://orcid.org/0000-0002-4006-2826)) and
+Nancy Soontiens ([ORCID 0000-0003-2880-8717](https://orcid.org/0000-0003-2880-8717)).
 The detection logic is adapted from the reference implementation
 [`marineHeatWaves`](https://github.com/ecjoliver/marineHeatWaves) by Eric C. J. Oliver.
 
