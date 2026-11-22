@@ -1,0 +1,5 @@
+case,writer,dask_scheduler,workers,bytes,gib,seconds,peak_rss_bytes,codec,fraction_of_uncompressed,uncompressed_over_this,phase,label,cells,timesteps,chunks,error
+source,"to_zarr default (computed on worker processes, includes detection)",processes,14,1212077932,1.128835540264845,164.21447630000011,22842826752.0,"(ZstdCodec(level=0, checksum=False),)",0.06560031819148524,15.243828499139774,storage,d33x97x109,348909,12017,"{'depth': 33, 'latitude': 8, 'longitude': 8, 'time': 12017}",
+a,"to_netcdf, uncompressed",threads,14,18476708123,17.207775379531085,225.01684760000035,,,1.0,1.0,storage,d33x97x109,348909,12017,"{'depth': 33, 'latitude': 8, 'longitude': 8, 'time': 12017}",
+b,"to_netcdf, zlib level 1 + shuffle",threads,14,1379845315,1.285081091336906,52.95650690000002,,,0.07468025720893183,13.390419869635895,storage,d33x97x109,348909,12017,"{'depth': 33, 'latitude': 8, 'longitude': 8, 'time': 12017}",
+c,"to_zarr, default compressor",threads,14,1212077932,1.128835540264845,9.149524500000098,,"(ZstdCodec(level=0, checksum=False),)",0.06560031819148524,15.243828499139774,storage,d33x97x109,348909,12017,"{'depth': 33, 'latitude': 8, 'longitude': 8, 'time': 12017}",

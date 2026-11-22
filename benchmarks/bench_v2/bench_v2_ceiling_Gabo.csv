@@ -1,0 +1,2 @@
+phase,label,cells,timesteps,raw_bytes,projected_in_memory_bytes,fits_in_memory,chunk_side,n_chunks,detect_s,write_s,write_resolved,total_s,n_output_vars,peak_rss_bytes,written_bytes,peak_over_raw,cell_steps_per_s
+ceiling,d33x109x109,348909,12017,33542715624,243573783775.23837,False,4,700,901.0197029000265,672.9266709999647,True,1573.9463738999912,1,3708207104,16771429314,0.11055178553720788,2663902.355587125

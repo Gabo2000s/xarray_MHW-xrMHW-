@@ -1,109 +1,439 @@
-# Multidimensional Marine Heatwave Detector (Xarray + Dask) (xrMHW)
+# xrMHW — Multidimensional Marine Heatwave Detector (Xarray + Dask)
 
-A high-performance, parallelized Python implementation of the Marine Heatwave (MHW) detection definitions proposed by [Hobday et al. (2016)](https://doi.org/10.1016/j.pocean.2015.12.014) and developed by Eric Oliver. Code developed by Gutiérrez-Cárdenas, GS. (ORCID: 0000-0002-3915-7684; DEC 2025)
+A parallel, out-of-core Python implementation of the marine heatwave (MHW) definition of
+[Hobday et al. (2016)](https://doi.org/10.1016/j.pocean.2015.12.014), applied natively to
+N-dimensional ocean grids (time × latitude × longitude × **depth**).
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
-![License](https://img.shields.io/badge/License-GPL3.0-green)
-![Status](https://img.shields.io/badge/Status-Active-success)
+[![Tests](https://github.com/Gabo2000s/xarray_MHW-xrMHW-/actions/workflows/tests.yml/badge.svg)](https://github.com/Gabo2000s/xarray_MHW-xrMHW-/actions/workflows/tests.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18343767.svg)](https://doi.org/10.5281/zenodo.18343767)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![License](https://img.shields.io/badge/License-GPL--3.0-green)
 
-## 🌊 Overview
+Developed by Gabriel S. Gutiérrez-Cárdenas ([ORCID 0000-0002-3915-7684](https://orcid.org/0000-0002-3915-7684)),
+with Frédéric Cyr ([ORCID 0000-0002-1581-7502](https://orcid.org/0000-0002-1581-7502)),
+Eric C. J. Oliver ([ORCID 0000-0002-4006-2826](https://orcid.org/0000-0002-4006-2826)) and
+Nancy Soontiens ([ORCID 0000-0003-2880-8717](https://orcid.org/0000-0003-2880-8717)).
+The detection logic is adapted from the reference implementation
+[`marineHeatWaves`](https://github.com/ecjoliver/marineHeatWaves) by Eric C. J. Oliver.
 
-This tool is designed to process **large-scale oceanographic datasets** (global ocean circulation models, eddy-resolving models, SST data) that are multidimensional (Latitude, Longitude, Depth, Time). Unlike standard 1D implementations, this package leverages `xarray` and `dask` to:
+---
 
-1.  **Vectorize** detection logic across spatial grids.
-2.  **Parallelize** computations to handle memory-intensive files (e.g., GLORYS, OISST).
-3.  **Detect** MHW or MCS events in 3D (Surface) or 4D (Volumetric) arrays.
+## What xrMHW does, and why
 
-## 🚀 Features
+Marine heatwaves are increasingly studied below the surface, where they can be more
+intense, longer-lived and ecologically more consequential than their surface expression
+(Sun et al., 2023; Malan et al., 2025). Detecting them in a depth-resolved reanalysis
+means applying the Hobday definition independently to every cell of a four-dimensional
+grid — for a domain such as the Grand Banks at 1/12° with 33 depth levels and three
+decades of daily fields, that is hundreds of thousands of time series and far more data
+than fits in memory.
 
-- **Standard Compliance:** Implements the Hobday et al. (2016) baseline.
-- **Volumetric Analysis:** Capable of detecting subsurface heatwaves if depth data is provided.
-- **Robustness:** Automatically handles leap years, missing data (NaNs), and land masks.
-- **Efficiency:** Uses `xr.apply_ufunc` for optimized compiled execution.
+The established tools were not built for that shape of problem. Oliver's
+`marineHeatWaves` and Schlegel & Smit's `heatwaveR` operate on a single time series at a
+time; `xmhw` brings the definition to xarray but targets sea surface temperature.
+xrMHW keeps the definition intact and changes the execution model: detection is mapped
+over the spatial dimensions with `xarray.apply_ufunc` and Dask, so the computation
+streams over chunks, uses every available core, and returns results on the input grid
+with depth carried through untouched. It adds the diagnostics that depth-resolved work
+needs — in particular a dimensionless **severity index**, comparable across depths, and
+marine cold spell detection — while reproducing the reference implementation to
+floating-point precision in its default configuration (see
+[Validation](#validation-against-the-reference-implementation)).
 
-## 🛠 Installation
+## Scope and limitations
 
-Install the dependencies:
+**xrMHW computes pointwise fields.** Every grid cell is treated as an independent 1-D
+time series, exactly as in the reference implementation. This has a consequence worth
+stating plainly: `mhw_duration` is the persistence of the exceedance **in that
+individual cell**, not the lifetime of a coherent three-dimensional structure. On a 4-D
+grid, neighbouring cells may report different durations for what is physically one
+event. Connected-component labelling, object tracking and event-level (volumetric)
+metrics are deliberately out of scope.
+
+Other limitations:
+
+- **Daily resolution.** The climatology windows and the minimum-duration filter are
+  defined in days.
+- **Standard calendars only.** The time coordinate must be convertible with
+  `.toordinal()`; `cftime` calendars (`noleap`, `360_day`) raise a `TypeError`. Convert
+  the calendar before calling xrMHW.
+- **No spatial aggregation.** Regional averages, event catalogues and composites are
+  left to the user's downstream analysis.
+
+## Upgrading from v2.x
+
+v3.0.0 changes the output contract and, in some cases, the numbers. Read this before
+re-running an existing analysis.
+
+**Renamed output.** `threshold` is now `{prefix}_threshold` (`mhw_threshold` /
+`mcs_threshold`), so heatwave and cold spell results can be merged. Code doing
+`out["threshold"]` must be updated; `output_vars=["threshold"]` still works as an alias.
+
+**New output.** `{prefix}_severity` is returned by default. `detect_mhw_core` and
+`mhw_1d_wrapper` now return nine arrays instead of eight, with severity appended last —
+code that unpacks the tuple must be updated.
+
+**Results may differ.** Three corrections change detected events and their properties:
+
+- The day-of-year climatology now pools consecutive calendar days around each occurrence,
+  as the reference implementation does, instead of days sharing a day-of-year value.
+  Thresholds shift by a few thousandths of a degree, which can move event boundaries
+  where a day sits marginally above or below the threshold.
+- Categories are evaluated at the peak of the severity index rather than at the peak of
+  the raw anomaly, and are capped at 4 (Extreme) per Hobday et al. (2018). Previously an
+  event could be reported as category 5 or higher.
+- Days with an undefined threshold no longer count as exceedances, and rounding noise on
+  a zero-variance baseline no longer produces spurious events.
+
+Catalogues produced with v2.x should be regenerated rather than mixed with v3 output.
+
+## Installation
 
 ```bash
-pip install xarray dask netCDF4 scipy pandas numpy
+git clone https://github.com/Gabo2000s/xarray_MHW-xrMHW-.git
+cd xarray_MHW-xrMHW-
+pip install .
 ```
 
-⚙️ Input Specifications
-The script expects a NetCDF file with the following characteristics:
-
-| Dimension | Description                                                                          |
-| :-------- | :----------------------------------------------------------------------------------- |
-| **Time**  | Must be a datetime object. The script handles daily resolution.                      |
-| **Space** | Standard `latitude` and `longitude`. Optional `depth` dimension for volumetric data. |
-
-| Variable        | Description                                          | Units   |
-| :-------------- | :--------------------------------------------------- | :------ |
-| **Temperature** | Sea Surface Temperature (SST)/Potential Temperature. | °C or K |
-
-## 🖥 Usage
-
-To integrate the **xrMHW** detector into your oceanographic analysis workflow, follow these steps:
-
-1. Clone the repository
-   Download the source code directly from GitHub:
+Or directly from GitHub:
 
 ```bash
-!conda install git -y
-!git clone https://github.com/Gabo2000s/xarray_MHW-xrMHW-.git
+pip install git+https://github.com/Gabo2000s/xarray_MHW-xrMHW-.git
 ```
 
-2. Open xrMHW.py.
-
-Edit or copy the CONFIGURATION section at the bottom of the script:
+For development, including the test dependencies:
 
 ```bash
-# --- CONFIGURATION ---
-INPUT_FILE = './data/GLORYS_1993-2024.nc'
-OUTPUT_FILE = './results/MHW_output.nc'
-VAR_NAME = 'thetao'  # Variable name in your NetCDF
-CLIM_START = 1993
-CLIM_END = 2022
+pip install -e ".[test]"
 ```
 
-## 📊 Output Specifications
+Requires Python ≥ 3.10. Dependencies (`xarray`, `dask`, `netCDF4`, `scipy`, `pandas`,
+`numpy`) are installed automatically; the CI matrix covers Python 3.10, 3.11 and 3.12.
 
-The output is a NetCDF file containing the computed MHW metrics. The data is masked: grid points without an active MHW event are filled with NaN.
+## Quick start
 
-| Variable                 | Name in NetCDF      | Description                                             | Units    |
-| :----------------------- | :------------------ | :------------------------------------------------------ | :------- |
-| **Intensity**            | `mhw_intensity`     | Temperature anomaly above climatology during the event. | °C       |
-| **Max Intensity**        | `mhw_max_intensity` | The highest anomaly recorded during the event duration. | °C       |
-| **Cumulative Intensity** | `mhw_cum_intensity` | Integrated intensity over the duration of the event.    | °C days  |
-| **Duration**             | `mhw_duration`      | Length of the MHW event.                                | Days     |
-| **Category**             | `mhw_category`      | Severity category (1=Moderate, 2=Strong, 3=Severe...).  | Unitless |
+```python
+import xarray as xr
+import xrMHW
 
-Also include the climatology and threshold
+# Detection needs the complete time series for each cell, so chunk over space
+# and keep time whole. If time is split into several chunks, xrMHW rechunks it
+# to a single chunk and warns; chunk over space to keep memory under control.
+ds = xr.open_dataset(
+    "GLORYS12V1_thetao_1993-2022.nc",
+    chunks={"time": -1, "latitude": 50, "longitude": 50},
+)
 
-## 🔬 Methodology
+mhw = xrMHW.xrMHW_func(
+    ds,
+    temp_var_name="thetao",
+    clim_period=(1993, 2022),   # 30-year baseline; required, there is no default
+)
 
-### Scientific Definition
+mhw.to_netcdf("MHW_output.nc")
+```
 
-The algorithm implements the standard hierarchical definition by **Hobday et al. (2016)**:
+The same call works unchanged on a 4-D dataset with a `depth` dimension — the extra
+dimension is simply another axis to map over.
 
-- **Climatology:** Calculated over a user-defined baseline (default 1991-2020) using an 11-day centered window and a 31-day moving average smoothing.
-- **Threshold:** temperatures exceeding the 90th percentile for MHW and 10th percentile for MCS
-- **Gap handling:** the algorinthm performs a pre-filter joining, physically bridges gaps of up to 2 days (default) before checking the minimum duration of the events. The original Hobaday el al. (2016) implementation joins events after filtering. That ensures that long, significant events interrupted by a biref drop in temperature are correcly identified as a single continuous event, rather than being discrded as two invalid short fragments.
-- **Event definition:** After the gap filling, any continuous period satisfying the threshold conditio at lesat 5 days is recorded as an event.
+**Only the continuous fields.** Requesting a subset skips the work the omitted fields
+would have required; asking for none of the per-event metrics bypasses the per-event
+loop entirely:
 
-### Technical Implementation
+```python
+sev = xrMHW.xrMHW_func(
+    ds, "thetao", (1993, 2022),
+    output_vars=["severity", "climatology", "threshold"],
+)
+```
 
-- **High-Performance Parallelism:** Using xarray with `dask = parallelized`, the tool maps the detection logic across the time dimension, allowing the workloead to be distribuited across all available CPU cores or a cluster, handling N-dimensional arrays (latitude, longitude, time, depth) efficiently
-- **Fast exit optimization:** The wrapper function includes a "Land mask cehcking". If the time series contain only `NaN`, the algorithm retunr `NaN` array, savin massive computation time during the process of big datasets
-- **Wrapper:** `xarray.apply_ufunc` maps this 1D function across the **Time** dimension of the N-dimensional input array, effectively looping over `Lat`, `Lon`, and `Depth` in C-speed (vectorized).
-- **Chunking:** The workflow relies on `Dask` chunking to process datasets significantly larger than the available RAM by streaming blocks of spatial data.
+**Marine cold spells.** The percentile switches to the 10th automatically and the output
+variables take the `mcs_` prefix:
 
-## 📄 License
+```python
+mcs = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), cold_spells=True)
+```
 
-Distributed under the GPL-3.0 license. See LICENSE for more information.
+**Non-default gap handling.** To bridge short interruptions *before* the duration filter
+rather than after it (a documented departure from the standard definition):
 
-## 📚 References
+```python
+joined = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), join_method="pre-filter")
+```
 
-Hobday, A. J., et al. (2016). A hierarchical approach to defining marine heatwaves. Progress in Oceanography, 141, 227-238. DOI: 10.1016/j.pocean.2015.12.014
+## Example notebooks
 
-Schlegel, R. W., & Smit, A. J. (2018). marineHeatWaves: Detecting and analyzing marine heatwaves. Journal of Open Source Software, 3(27), 812.
+The [`examples/`](examples/) folder has six short notebooks that run on real data
+downloaded automatically from Zenodo
+([10.5281/zenodo.22909109](https://doi.org/10.5281/zenodo.22909109)):
+
+| Notebook | What it covers |
+|---|---|
+| [00 · Setup and example data](examples/00_setup_and_data.ipynb) | Installation check, example data, input requirements |
+| [01 · A single time series](examples/01_single_point_1D.ipynb) | Detection at one point, the outputs, an event table, validation against `marineHeatWaves` |
+| [02 · Sea surface maps](examples/02_sea_surface_3D.ipynb) | Maps of a day, event days per year, marine cold spells |
+| [03 · Subsurface marine heatwaves](examples/03_subsurface_4D.ipynb) | Profiles, depth–time diagrams, sections, events hidden below the surface, 3-D view |
+| [04 · Many files, Dask and Zarr](examples/04_many_files_and_scaling.ipynb) | `open_mfdataset`, chunk planning from memory, a local cluster, Zarr output |
+| [05 · Troubleshooting](examples/05_troubleshooting.ipynb) | Common errors and silent pitfalls, with fixes |
+
+Install their extra dependencies with `pip install ".[examples]"` or with the conda
+environment in [`examples/environment.yml`](examples/environment.yml).
+
+## Input requirements
+
+| Dimension | Requirement |
+| :--- | :--- |
+| **Time** | Daily, datetime-like and convertible with `.toordinal()`. Must be a coordinate/index named `time`. |
+| **Space** | Any combination of latitude, longitude and depth; names are not constrained. Depth is optional. |
+
+| Variable | Description | Units |
+| :--- | :--- | :--- |
+| **Temperature** | Sea surface or potential temperature. | °C (or K — output anomalies inherit the input scale) |
+
+Land and permanently masked cells (all-NaN series) are short-circuited and returned as
+NaN, which saves a large fraction of the work on realistic ocean domains. Short data
+gaps are linearly interpolated before detection (`max_gap_interp`, 2 days by default);
+longer gaps remain NaN and never count as exceedances.
+
+## Outputs
+
+`xrMHW_func` returns an `xarray.Dataset` on the input grid. `{prefix}` is `mhw`, or
+`mcs` when `cold_spells=True`. Event fields are NaN-masked outside detected events;
+`climatology` and `{prefix}_threshold` are defined at every time step.
+
+| Variable | Description | Units |
+| :--- | :--- | :--- |
+| `{prefix}_intensity` | Temperature anomaly relative to the seasonal climatology. | °C |
+| `{prefix}_severity` | Dimensionless severity index, S = (T − T_clim) / (T_pctile − T_clim). | 1 |
+| `{prefix}_duration` | **Local (pointwise)** duration of the exceedance in this cell. | days |
+| `{prefix}_category` | 1 = Moderate, 2 = Strong, 3 = Severe, 4 = Extreme (Hobday et al., 2018). | 1 |
+| `{prefix}_max_intensity` | Peak anomaly reached during the event. | °C |
+| `{prefix}_cum_intensity` | Anomaly integrated over the event. | °C days |
+| `climatology` | Day-of-year climatological mean over the baseline, smoothed. | °C |
+| `{prefix}_threshold` | Day-of-year climatological percentile over the baseline, smoothed. | °C |
+
+Each variable carries `long_name`, `units` and `description` attributes, and the dataset
+records the detection settings in its global attributes (`mhw_detection_period`,
+`mhw_percentile`, `mhw_min_duration_days`, `mhw_max_gap_days`, `mhw_join_method`,
+`mhw_detection_scope`, `software`) so a saved file documents how it was produced.
+
+The threshold is prefixed because the 90th and 10th percentiles are different fields: a
+heatwave run and a cold spell run over the same data can be merged without collision.
+`climatology` is shared, since the seasonal mean does not depend on the percentile.
+
+`output_vars` accepts canonical names (`"mhw_severity"`) or short aliases
+(`"intensity"`, `"severity"`, `"duration"`, `"category"`, `"max_intensity"`,
+`"cum_intensity"`, `"clim"`/`"climatology"`, `"thresh"`/`"threshold"`), as a string or a
+sequence. Unknown names raise `ValueError` listing the valid ones.
+
+## Writing results efficiently
+
+Every output has the size of the input grid, and the event fields are NaN outside
+events, so a 4-D result written naively is large and mostly empty.
+
+```python
+import xrMHW
+
+out = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), output_vars=["severity", "category"])
+
+# netCDF-4 with compression: event fields are NaN outside events and compress well
+enc = {v: {"zlib": True, "complevel": 1} for v in out.data_vars}
+out.to_netcdf("mhw_severity.nc", encoding=enc)
+
+# or Zarr (compressed by default; one file per chunk, works with worker processes)
+out.to_zarr("mhw_severity.zarr", mode="w")
+```
+
+- **Write only the fields you need.** `output_vars` limits what is computed and
+  written; each field you leave out saves a full-grid array.
+- **Compress.** Written uncompressed, the output can be about 15 times
+  larger: for the severity field over the Grand Banks benchmark domain (see
+  [`benchmarks/`](benchmarks/)), uncompressed netCDF took 17.2 GiB and Zarr
+  1.13 GiB.
+- **With `dask.distributed` worker processes, prefer Zarr.** Writing a large netCDF file
+  from worker processes reopens the file for every chunk under a lock, and in our
+  benchmarks it failed after about 5 GB; Zarr writes each chunk independently.
+- **Keep the time axis in one chunk.** The climatology and the event detection use each
+  cell's complete record. A time axis split into several chunks is rechunked to one
+  chunk, with a warning; chunk over the spatial dimensions to control memory.
+
+## Parameters
+
+All of the following are passed as keyword arguments to `xrMHW_func`.
+
+| Parameter | Default | Meaning |
+| :--- | :--- | :--- |
+| `clim_period` | *(required)* | `(start_year, end_year)` of the climatology baseline, inclusive. |
+| `output_vars` | `None` (all) | Which output variables to compute and return. |
+| `cold_spells` | `False` | Detect marine cold spells instead of heatwaves. |
+| `pctile` | `90` / `10` | Percentile threshold; defaults to 10 when `cold_spells=True`. |
+| `min_duration` | `5` | Minimum event length, in days. |
+| `window_half_width` | `5` | Half-width of the climatology window (total 2w + 1 = 11 days). |
+| `smooth_pctile` | `True` | Smooth climatology and threshold with a moving average. |
+| `smooth_width` | `31` | Width of that smoothing window, in days. |
+| `max_gap_interp` | `2` | Longest run of missing values filled by interpolation before detection. |
+| `join_across_gaps` | `True` | Join events separated by a brief return to normal conditions. |
+| `max_gap` | `2` | Longest such gap that is bridged, in days. |
+| `join_method` | `'post-filter'` | Order of joining relative to the duration filter (see below). |
+
+## Methodology
+
+### Climatology and threshold
+
+For each day of the year, the climatological mean and the percentile threshold are
+computed by pooling the ±`window_half_width` **consecutive calendar days** around every
+occurrence of that day within the baseline period, across all baseline years, and are
+then smoothed with a `smooth_width`-day moving average. 29 February is interpolated from
+its neighbours rather than estimated from the roughly four times fewer samples available
+for it, and all years are aligned to a 366-day grid so that a given calendar date always
+maps to the same index.
+
+The distinction between pooling *consecutive calendar days* and pooling *days sharing a
+day-of-year value* is not cosmetic: the latter excludes 29 February from neighbouring
+windows and shifts the threshold by a few thousandths of a degree. xrMHW uses the
+former, which is what the reference implementation does.
+
+### Event definition and gap handling
+
+A day is an exceedance when the temperature is above the threshold (below it, for cold
+spells). Runs of exceedances are labelled, and runs shorter than `min_duration` are
+discarded.
+
+By default (`join_method='post-filter'`) **the minimum-duration filter is applied first,
+and surviving events separated by `max_gap` days or fewer are then joined** — the order
+used by Hobday et al. (2016) and by the reference implementation. Setting
+`join_method='pre-filter'` bridges short gaps *before* the duration filter, so a long
+event fragmented by a brief dip survives as a single event instead of being discarded as
+two short ones. This is a deliberate, documented departure from the standard definition,
+and it is not the default: use it when the fragmentation is a known artefact of the
+data, and say so in your methods.
+
+### Severity index and categories
+
+`{prefix}_severity` is the dimensionless severity index
+
+> S = (T − T_clim) / (T_p90 − T_clim)
+
+following Sen Gupta et al. (2020) and Malan et al. (2025). Normalising the anomaly by
+the local threshold-to-mean distance makes it comparable across depths and regions in a
+way a raw anomaly in °C is not: where variability is small, a modest anomaly can
+represent far more extreme conditions than a larger anomaly in a variable surface layer.
+The same expression holds for cold spells, where numerator and denominator are both
+negative.
+
+It is the continuous form of the Hobday et al. (2018) categorisation: the category is
+`floor(S)` evaluated at the peak of the severity index — not at the peak of the raw
+anomaly, which is a different day whenever the threshold-to-mean distance varies within
+the event — and is capped at 4 (Extreme).
+
+## Validation against the reference implementation
+
+In its default configuration xrMHW reproduces
+[`marineHeatWaves`](https://github.com/ecjoliver/marineHeatWaves) to floating-point
+precision. On a seeded 30-year daily series with injected events of known length:
+
+| Quantity | Agreement with the reference |
+| :--- | :--- |
+| Percentile threshold | max abs difference **0.0 °C** (exact) |
+| Seasonal climatology | max abs difference ~7 × 10⁻¹⁵ °C (machine precision) |
+| Event count, start and end dates | identical |
+| Durations | identical |
+| Peak and cumulative intensity | identical to < 10⁻⁸ °C |
+| Categories | identical |
+
+These are assertions in `tests/test_against_marineHeatWaves.py`, checked on every push
+by CI, with a climatology tolerance of 10⁻¹⁰ °C. A separate test pins the optimised,
+loop-free climatology against a literal transcription of the definition, so the
+implementation cannot be made faster at the cost of silently drifting from it.
+
+## Performance
+
+Detection runs as a Python function mapped over the spatial dimensions by
+`xarray.apply_ufunc` and executed in parallel across Dask chunks, so it scales with the
+available cores and streams datasets larger than memory. Two costs that dominate a naive
+implementation are avoided: the day-of-year climatology is computed without a
+366-iteration loop, using a single percentile call over a strided gather, and the
+calendar arithmetic — identical for every cell — is computed once per time axis instead
+of once per cell.
+
+On a 30-year daily series this is of the order of **7 ms per grid cell on a single
+core**, roughly an order of magnitude faster than the previous release while returning
+bit-identical results. Absolute timings depend on hardware, record length and chunking;
+measure on your own domain before planning a large run.
+
+## Related software
+
+| Package | Language | Grids | Notes |
+| :--- | :--- | :--- | :--- |
+| [`marineHeatWaves`](https://github.com/ecjoliver/marineHeatWaves) | Python | single time series | The reference implementation of Hobday et al. (2016); xrMHW's detection logic is adapted from it and validated against it. |
+| [`heatwaveR`](https://github.com/robwschlegel/heatwaveR) | R / C++ | single time series | Schlegel & Smit (2018); the established R implementation, with extensive event statistics and plotting. |
+| [`xmhw`](https://github.com/coecms/xmhw) | Python | xarray, gridded | Also derived from Oliver's code; oriented to sea surface temperature. |
+| **xrMHW** | Python | xarray + Dask, N-D | Depth-resolved 3-D/4-D grids, out-of-core execution, severity index and cold spells as first-class outputs, selective outputs, bit-exact reproduction of the reference. |
+
+If your data are a single time series or a surface field that fits in memory, the
+packages above are mature and well documented, and there is no reason to prefer xrMHW.
+Its case is the depth-resolved, out-of-core one.
+
+## Testing
+
+```bash
+pip install -e ".[test]"
+pytest -v
+```
+
+The suite covers agreement with the reference implementation, the xarray/Dask interface,
+gap handling in both modes, land masks, cold spells, the severity index and category
+definitions, output selection, Dask/eager equivalence, and the degenerate zero-variance
+case. `tests/marineHeatWaves.py` is a vendored copy of the reference implementation used
+only for comparison.
+
+## Contributing
+
+Bug reports, numerical discrepancies and feature requests are welcome through the
+[issue tracker](https://github.com/Gabo2000s/xarray_MHW-xrMHW-/issues). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, coding conventions and
+test requirements.
+
+## How to cite
+
+If xrMHW contributes to work you publish, please cite the archived software (the DOI below
+always resolves to the latest version; Zenodo also lists a DOI for each version):
+
+> Gutiérrez-Cárdenas, G. S. (2026). *xrMHW: A High-Performance Multidimensional Marine
+> Heatwave Detector*. Zenodo. https://doi.org/10.5281/zenodo.18343767
+
+and the definition it implements (Hobday et al., 2016). Please also consider citing
+Oliver's `marineHeatWaves`, from which the detection logic is adapted.
+
+## License
+
+Distributed under the GPL-3.0 license; see [LICENSE](LICENSE). `tests/marineHeatWaves.py`
+is redistributed from Eric C. J. Oliver's `marineHeatWaves` under the same license, with
+a one-line compatibility patch for NumPy ≥ 1.25, and is used only to validate xrMHW
+against it.
+
+## References
+
+Hobday, A. J., Alexander, L. V., Perkins, S. E., Smale, D. A., Straub, S. C.,
+Oliver, E. C. J., et al. (2016). A hierarchical approach to defining marine heatwaves.
+*Progress in Oceanography*, 141, 227–238. https://doi.org/10.1016/j.pocean.2015.12.014
+
+Hobday, A. J., Oliver, E. C. J., Sen Gupta, A., Benthuysen, J. A., Burrows, M. T.,
+Donat, M. G., et al. (2018). Categorizing and naming marine heatwaves. *Oceanography*,
+31(2), 162–173. https://doi.org/10.5670/oceanog.2018.205
+
+Malan, N., Sen Gupta, A., Schaeffer, A., Zhang, S., Doblin, M. A., Pilo, G. S., et al.
+(2025). Lifting the lid on marine heatwaves. *Progress in Oceanography*, 239, 103539.
+https://doi.org/10.1016/j.pocean.2025.103539
+
+Schlegel, R. W., & Smit, A. J. (2018). heatwaveR: A central algorithm for the detection
+of heatwaves and cold-spells. *Journal of Open Source Software*, 3(27), 821.
+https://doi.org/10.21105/joss.00821
+
+Sen Gupta, A., Thomsen, M., Benthuysen, J. A., Hobday, A. J., Oliver, E. C. J.,
+Alexander, L. V., et al. (2020). Drivers and impacts of the most extreme marine heatwave
+events. *Scientific Reports*, 10, 19359. https://doi.org/10.1038/s41598-020-75445-3
+
+Sun, D., Li, F., Jing, Z., Hu, S., & Zhang, B. (2023). Frequent marine heatwaves hidden
+below the surface of the global ocean. *Nature Geoscience*, 16, 1099–1104.
+https://doi.org/10.1038/s41561-023-01325-w

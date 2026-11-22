@@ -1,0 +1,37 @@
+{
+  "reference": {
+    "xrMHW (in-memory)": {
+      "seconds": 1.2601063000038266,
+      "times_xrMHW": 1.0
+    },
+    "marineHeatWaves (cell by cell)": {
+      "seconds": 23.709956300037447,
+      "times_xrMHW": 18.815838235207178
+    },
+    "xmhw [grid]": {
+      "seconds": 142.85471079999115,
+      "times_xrMHW": 113.36719037081026
+    }
+  },
+  "provenance": {
+    "timestamp_utc": "2026-09-22T22:50:14+00:00",
+    "host": "Gabo",
+    "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+    "physical_cores": 14,
+    "logical_cores": 20,
+    "total_ram_gib": 63.7,
+    "os": "Windows 10",
+    "python": "3.11.16",
+    "xrMHW_version": "3.0.0",
+    "xrMHW_origin": "xrMHW.py",
+    "xrMHW_install_mode": "editable",
+    "numpy": "1.26.4",
+    "xarray": "2026.7.0",
+    "dask": "2026.8.0",
+    "scipy": "1.17.1",
+    "threads_pinned_to": "1",
+    "dask_threads": 14
+  },
+  "notes": [],
+  "chunk_side_used": 12
+}

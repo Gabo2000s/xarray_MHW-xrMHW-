@@ -1,0 +1,95 @@
+{
+  "reference": {
+    "16": {
+      "xrMHW (in-memory)": {
+        "seconds": 1.2822173000313342,
+        "times_xrMHW": 1.0,
+        "cells": 256,
+        "threads": 1,
+        "dask_scheduler": "none"
+      },
+      "marineHeatWaves (cell by cell)": {
+        "seconds": 20.024361700052395,
+        "times_xrMHW": 15.616979820474306,
+        "cells": 256,
+        "threads": 1,
+        "dask_scheduler": "none"
+      },
+      "xmhw [grid, synchronous]": {
+        "seconds": 120.06765890005045,
+        "times_xrMHW": 93.64064803767371,
+        "cells": 256,
+        "threads": 1,
+        "dask_scheduler": "synchronous",
+        "threshold_s": 108.83531570015475,
+        "detect_s": 11.232343199895695,
+        "threshold_share_percent": 90.64498858160799
+      },
+      "xmhw [grid, threads]": {
+        "seconds": 144.7699776000809,
+        "times_xrMHW": 112.90596188067583,
+        "cells": 256,
+        "threads": 14,
+        "dask_scheduler": "threads",
+        "threshold_s": 130.5859348999802,
+        "detect_s": 14.18404270010069,
+        "threshold_share_percent": 90.20235898683129
+      },
+      "event_count_agreement": {
+        "marineHeatWaves": {
+          "cells_compared": 256,
+          "mismatches": 0,
+          "max_abs_diff": 0.0,
+          "events_total_xrMHW": 19984.0,
+          "events_total_other": 19984.0
+        },
+        "xmhw": {
+          "cells_compared": 256,
+          "mismatches": 22,
+          "max_abs_diff": 2.0,
+          "events_total_xrMHW": 19984.0,
+          "events_total_other": 19985.0
+        }
+      }
+    }
+  },
+  "provenance": {
+    "timestamp_utc": "2026-11-05T04:39:40+00:00",
+    "script": "benchmark_xrMHW_v3_3.py",
+    "host": "Gabo",
+    "cpu": "Intel64 Family 6 Model 186 Stepping 2, GenuineIntel",
+    "physical_cores": 14,
+    "logical_cores": 20,
+    "total_ram_gib": 63.7,
+    "os": "Windows 10",
+    "python": "3.11.16",
+    "xrMHW_version": "3.0.0",
+    "xrMHW_origin": "xrMHW.py",
+    "xrMHW_install_mode": "editable",
+    "numpy": "1.26.4",
+    "xarray": "2026.7.0",
+    "dask": "2026.8.0",
+    "scipy": "1.17.1",
+    "distributed": "2026.8.0",
+    "pandas": "3.0.6",
+    "xmhw": "1.0.0",
+    "zarr": "3.1.5",
+    "netCDF4": "1.7.4",
+    "h5py": null,
+    "psutil": "7.2.2",
+    "threads_pinned_to": "1",
+    "input_path": "/path/to/GLORYS_GrandBanks_1993_2025.nc",
+    "input_drive": "E:",
+    "outdir": "benchmarks/bench_v3",
+    "outdir_drive": "D:",
+    "scratch": "benchmarks/bench_v3",
+    "scratch_drive": "D:",
+    "dask_threads": 14,
+    "marineHeatWaves_origin": "tests/marineHeatWaves.py"
+  },
+  "notes": [
+    "side 16: event counts differ from xmhw in 22 of 256 cells (max abs diff 2.0)",
+    "detect_cold_s is cold only if the input was not in the OS file cache when the run started; cold_over_warm close to 1 means it was already cached"
+  ],
+  "chunk_side_used": 12
+}

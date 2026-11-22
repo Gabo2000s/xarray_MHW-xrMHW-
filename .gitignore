@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Files written by the example notebooks
+examples/xrmhw_outputs/
+
+# Output of the benchmarks and notebooks
+*.zarr/
+
+# Local tools and working files, not part of the package
+.qodo/
