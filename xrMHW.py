@@ -47,7 +47,7 @@ import pandas as pd
 import scipy.ndimage as ndimage
 import xarray as xr
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 __all__ = ["detect_mhw_core", "mhw_1d_wrapper", "xrMHW_func", "xrMHW_clim",
            "xrMHW_events", "xrMHW_doy", "xrMHW_detrend", "xrMHW_annual",

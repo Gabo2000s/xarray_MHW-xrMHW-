@@ -113,8 +113,8 @@ For development, including the test dependencies:
 pip install -e ".[test]"
 ```
 
-Requires Python ≥ 3.9. Dependencies (`xarray`, `dask`, `netCDF4`, `scipy`, `pandas`,
-`numpy`) are installed automatically; the CI matrix covers Python 3.9, 3.10 and 3.11.
+Requires Python ≥ 3.10. Dependencies (`xarray`, `dask`, `netCDF4`, `scipy`, `pandas`,
+`numpy`) are installed automatically; the CI matrix covers Python 3.10 to 3.13.
 
 ## Quick start
 
