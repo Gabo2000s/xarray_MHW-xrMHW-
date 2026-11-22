@@ -23,7 +23,7 @@
     "os": "Windows 10",
     "python": "3.11.16",
     "xrMHW_version": "3.0.0",
-    "xrMHW_origin": "D:\\Proyectos\\xarray_MHW-xrMHW-\\xrMHW.py",
+    "xrMHW_origin": "xrMHW.py",
     "xrMHW_install_mode": "editable",
     "numpy": "1.26.4",
     "xarray": "2026.7.0",

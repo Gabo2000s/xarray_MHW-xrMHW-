@@ -25,9 +25,9 @@ them, the window with the most ocean cells at the deepest level is chosen.
 Usage
 -----
     python make_example_data.py \\
-        --glorys E:\\A_Proyectos\\MHW_Grand_Banks\\Input\\GLORYS_GrandBanks_1993_2025.nc \\
-        --ostia  D:\\Proyectos\\xarray_MHW-xrMHW-\\OSTIA_example_data.nc \\
-        --out    E:\\A_Proyectos\\MHW_xrMHW_Paper\\example_data \\
+        --glorys /path/to/GLORYS_GrandBanks_1993_2025.nc \\
+        --ostia  /path/to/OSTIA_example_data.nc \\
+        --out    ./example_data \\
         --lat0 43.5 --lon0 -49.5
 
 The files are published at https://doi.org/10.5281/zenodo.22909109 under the
