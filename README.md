@@ -1,12 +1,12 @@
-# xrMHW — Multidimensional Marine Heatwave Detector (Xarray + Dask)
+# xrMHW: parallel, out-of-core detection of surface and subsurface marine heatwaves
 
 A parallel, out-of-core Python implementation of the marine heatwave (MHW) definition of
 [Hobday et al. (2016)](https://doi.org/10.1016/j.pocean.2015.12.014), applied natively to
 N-dimensional ocean grids (time × latitude × longitude × **depth**).
 
 [![Tests](https://github.com/Gabo2000s/xarray_MHW-xrMHW-/actions/workflows/tests.yml/badge.svg)](https://github.com/Gabo2000s/xarray_MHW-xrMHW-/actions/workflows/tests.yml)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18476144.svg)](https://doi.org/10.5281/zenodo.18476144)
-![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18343767.svg)](https://doi.org/10.5281/zenodo.18343767)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/License-GPL--3.0-green)
 
 Developed by Gabriel S. Gutiérrez-Cárdenas ([ORCID 0000-0002-3915-7684](https://orcid.org/0000-0002-3915-7684)).
