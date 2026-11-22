@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use xrMHW, please cite it as below."
 type: software
-title: "xrMHW: A High-Performance Multidimensional Marine Heatwave Detector"
+title: "xrMHW: parallel, out-of-core detection of surface and subsurface marine heatwaves"
 abstract: >-
   Parallel, out-of-core detection of surface and subsurface marine heatwaves and
   cold spells on xarray datasets, following Hobday et al. (2016).

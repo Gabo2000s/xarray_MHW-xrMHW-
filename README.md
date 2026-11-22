@@ -541,8 +541,8 @@ test requirements.
 If xrMHW contributes to work you publish, please cite the archived software (the DOI
 below always resolves to the latest version; Zenodo also lists a DOI for each version):
 
-> Gutiérrez-Cárdenas, G. S. (2026). *xrMHW: A High-Performance Multidimensional Marine
-> Heatwave Detector*. Zenodo. https://doi.org/10.5281/zenodo.18343767
+> Gutiérrez-Cárdenas, G. S. (2026). *xrMHW: parallel, out-of-core detection of surface and
+> subsurface marine heatwaves*. Zenodo. https://doi.org/10.5281/zenodo.18343767
 
 GitHub's "Cite this repository" button gives the same reference from
 [CITATION.cff](CITATION.cff).

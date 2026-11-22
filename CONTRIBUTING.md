@@ -17,11 +17,10 @@ As a scientific package, maintaining numerical reproducibility and computational
 
 ## Support and maintenance
 
-xrMHW is maintained by G. S. Gutiérrez-Cárdenas as part of research at the Fisheries and
-Marine Institute of Memorial University of Newfoundland. Issues and pull requests are
-answered on a best-effort basis, normally within two weeks. Bug reports that affect
-numerical results take priority. Releases are tagged on GitHub and archived on Zenodo;
-changes are listed in [CHANGELOG.md](CHANGELOG.md).
+xrMHW is maintained by G. S. Gutiérrez-Cárdenas. Issues and pull requests are answered
+on a best-effort basis; bug reports that affect numerical results take priority.
+Releases are tagged on GitHub and archived on Zenodo; changes are listed in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Code of conduct
 
