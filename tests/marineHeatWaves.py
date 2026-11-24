@@ -232,7 +232,8 @@ def detect(t, temp, climatologyPeriod=[None,None], pctile=90, windowHalfWidth=5,
             yearClim[i] = date.fromordinal(tClim[i]).year
             monthClim[i] = date.fromordinal(tClim[i]).month
             dayClim[i] = date.fromordinal(tClim[i]).day
-            doyClim[i] = doy_leapYear[(month_leapYear == monthClim[i]) * (day_leapYear == dayClim[i])]
+            # xrMHW patch (numpy >= 1.25): same 1-element array as for doy above.
+            doyClim[i] = doy_leapYear[(month_leapYear == monthClim[i]) * (day_leapYear == dayClim[i])][0]
     else:
         tempClim = temp.copy()
         TClim = np.array([T]).copy()[0]
