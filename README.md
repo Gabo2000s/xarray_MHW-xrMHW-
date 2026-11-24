@@ -24,7 +24,7 @@ Marine heatwaves are increasingly studied below the surface, where they can be m
 intense, longer-lived and ecologically more consequential than their surface expression
 (Sun et al., 2023; Malan et al., 2025). Detecting them in a depth-resolved reanalysis
 means applying the Hobday definition independently to every cell of a four-dimensional
-grid — for a domain such as the Grand Banks at 1/12° with 33 depth levels and three
+grid. For a domain such as the Grand Banks at 1/12° with 33 depth levels and three
 decades of daily fields, that is hundreds of thousands of time series and far more data
 than fits in memory.
 
@@ -35,8 +35,8 @@ xrMHW keeps the definition intact and changes the execution model: detection is 
 over the spatial dimensions with `xarray.apply_ufunc` and Dask, so the computation
 streams over chunks, uses every available core, and returns results on the input grid
 with depth carried through untouched. It adds the diagnostics that depth-resolved work
-needs — in particular a dimensionless **severity index**, comparable across depths, and
-marine cold spell detection — while reproducing the reference implementation to
+needs, in particular a dimensionless **severity index**, comparable across depths, and
+marine cold spell detection, while reproducing the reference implementation to
 floating-point precision in its default configuration (see
 [Validation](#validation-against-the-reference-implementation)).
 
@@ -79,7 +79,7 @@ re-running an existing analysis.
 `out["threshold"]` must be updated; `output_vars=["threshold"]` still works as an alias.
 
 **New output.** `{prefix}_severity` is returned by default. `detect_mhw_core` and
-`mhw_1d_wrapper` now return nine arrays instead of eight, with severity appended last —
+`mhw_1d_wrapper` now return nine arrays instead of eight, with severity appended last;
 code that unpacks the tuple must be updated.
 
 **Results may differ.** Three corrections change detected events and their properties:
@@ -142,7 +142,7 @@ mhw = xrMHW.xrMHW_func(
 mhw.to_netcdf("MHW_output.nc")
 ```
 
-The same call works unchanged on a 4-D dataset with a `depth` dimension — the extra
+The same call works unchanged on a 4-D dataset with a `depth` dimension: the extra
 dimension is simply another axis to map over.
 
 **Only the continuous fields.** Requesting a subset skips the work the omitted fields
@@ -333,7 +333,7 @@ environment in [`examples/environment.yml`](examples/environment.yml).
 
 | Variable | Description | Units |
 | :--- | :--- | :--- |
-| **Temperature** | Sea surface or potential temperature. | °C (or K — output anomalies inherit the input scale) |
+| **Temperature** | Sea surface or potential temperature. | °C (or K; output anomalies inherit the input scale) |
 
 Land and permanently masked cells (all-NaN series) are short-circuited and returned as
 NaN, which saves a large fraction of the work on realistic ocean domains. Short data
@@ -445,7 +445,7 @@ spells). Runs of exceedances are labelled, and runs shorter than `min_duration` 
 discarded.
 
 By default (`join_method='post-filter'`) **the minimum-duration filter is applied first,
-and surviving events separated by `max_gap` days or fewer are then joined** — the order
+and surviving events separated by `max_gap` days or fewer are then joined**, the order
 used by Hobday et al. (2016) and by the reference implementation. Setting
 `join_method='pre-filter'` bridges short gaps *before* the duration filter, so a long
 event fragmented by a brief dip survives as a single event instead of being discarded as
@@ -467,9 +467,9 @@ The same expression holds for cold spells, where numerator and denominator are b
 negative.
 
 It is the continuous form of the Hobday et al. (2018) categorisation: the category is
-`floor(S)` evaluated at the peak of the severity index — not at the peak of the raw
+`floor(S)` evaluated at the peak of the severity index (not at the peak of the raw
 anomaly, which is a different day whenever the threshold-to-mean distance varies within
-the event — and is capped at 4 (Extreme).
+the event) and is capped at 4 (Extreme).
 
 ## Validation against the reference implementation
 
@@ -498,7 +498,7 @@ Detection runs as a Python function mapped over the spatial dimensions by
 available cores and streams datasets larger than memory. Two costs that dominate a naive
 implementation are avoided: the day-of-year climatology is computed without a
 366-iteration loop, using a single percentile call over a strided gather, and the
-calendar arithmetic — identical for every cell — is computed once per time axis instead
+calendar arithmetic, identical for every cell, is computed once per time axis instead
 of once per cell.
 
 On a 30-year daily series this is of the order of **7 ms per grid cell on a single

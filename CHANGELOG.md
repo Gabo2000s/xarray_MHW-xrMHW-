@@ -4,7 +4,7 @@ All notable changes to xrMHW are listed here. Versions follow
 [semantic versioning](https://semver.org/). Each release is archived on Zenodo under the
 concept DOI [10.5281/zenodo.18343767](https://doi.org/10.5281/zenodo.18343767).
 
-## [3.1.0] — unreleased
+## [3.1.0] - unreleased
 
 ### Added
 - `xrMHW_clim` computes the climatology and threshold on their own; `xrMHW_events`
@@ -38,7 +38,7 @@ concept DOI [10.5281/zenodo.18343767](https://doi.org/10.5281/zenodo.18343767).
 - `xrMHW_func` with the fixed baseline, `detect_mhw_core` and `mhw_1d_wrapper` give the
   same results as in 3.0.0.
 
-## [3.0.0] — 2026-11-22
+## [3.0.0] - 2026-11-22
 
 Archived as [10.5281/zenodo.24432046](https://doi.org/10.5281/zenodo.24432046).
 
@@ -65,7 +65,7 @@ Archived as [10.5281/zenodo.24432046](https://doi.org/10.5281/zenodo.24432046).
 
 See "Upgrading from v2.x" in the README.
 
-## [2.0.0] — 2026-02-04
+## [2.0.0] - 2026-02-04
 
 ### Added
 - `join_method` (`"post-filter"`, default, or `"pre-filter"`) to choose whether short
@@ -76,7 +76,7 @@ See "Upgrading from v2.x" in the README.
 - The license header of `xrMHW.py` now says GPL-3.0, matching the LICENSE file (it
   still said MIT in 1.0.0).
 
-## [1.0.0] — 2026-01-22
+## [1.0.0] - 2026-01-22
 
 First release: detection of marine heatwaves and cold spells following Hobday et al.
 (2016) on xarray datasets of any dimensionality, parallelised with Dask
