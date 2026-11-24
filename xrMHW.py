@@ -1,5 +1,5 @@
 """
-xrMHW — N-dimensional Marine Heatwave detection with xarray + Dask
+xrMHW: N-dimensional Marine Heatwave detection with xarray + Dask
 ==================================================================
 
 An efficient, parallel, out-of-core implementation of the pointwise marine
@@ -988,20 +988,20 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None,
     **kwargs
         Passed to the detection logic:
 
-        * **cold_spells** (bool, default False) — detect marine cold spells.
+        * **cold_spells** (bool, default False): detect marine cold spells.
         * **pctile** (int/float, default 90 for MHW, 10 for MCS).
-        * **min_duration** (int, default 5) — minimum event length in days.
-        * **window_half_width** (int, default 5) — climatology window is
+        * **min_duration** (int, default 5): minimum event length in days.
+        * **window_half_width** (int, default 5): climatology window is
           ``2*w + 1`` days.
         * **smooth_pctile** (bool, default True) and **smooth_width**
-          (int, default 31) — smoothing of climatology and threshold.
-        * **max_gap_interp** (int, default 2) — longest run of missing values
+          (int, default 31): smoothing of climatology and threshold.
+        * **max_gap_interp** (int, default 2): longest run of missing values
           filled by interpolation *before* detection.
         * **join_across_gaps** (bool, default True) and **max_gap**
-          (int, default 2) — joining of events separated by a brief return to
+          (int, default 2): joining of events separated by a brief return to
           normal conditions.
         * **join_method** ({'post-filter', 'pre-filter'}, default
-          'post-filter') — order of joining relative to the duration filter.
+          'post-filter'): order of joining relative to the duration filter.
     baseline : {'fixed', 'detrended', 'adaptation', 'periodic', 'shifting'}
         Default 'fixed'. Any other baseline (Smith et al. 2025) runs
         `xrMHW_clim` and `xrMHW_events` in turn; its options (``trend``,
@@ -1016,14 +1016,14 @@ def xrMHW_func(ds, temp_var_name, clim_period, output_vars=None,
         detected; `climatology` and `{prefix}_threshold` are defined at every
         time step. `{prefix}` is 'mhw', or 'mcs' when ``cold_spells=True``:
 
-        * ``{prefix}_intensity`` — anomaly relative to climatology (degC)
-        * ``{prefix}_severity`` — dimensionless severity index
-        * ``{prefix}_duration`` — local pointwise duration (days)
-        * ``{prefix}_category`` — 1 Moderate ... 4 Extreme
-        * ``{prefix}_max_intensity`` — peak anomaly of the event (degC)
-        * ``{prefix}_cum_intensity`` — integrated anomaly (degC days)
-        * ``climatology`` — seasonal climatological mean (degC)
-        * ``{prefix}_threshold`` — seasonal percentile threshold (degC)
+        * ``{prefix}_intensity``: anomaly relative to climatology (degC)
+        * ``{prefix}_severity``: dimensionless severity index
+        * ``{prefix}_duration``: local pointwise duration (days)
+        * ``{prefix}_category``: 1 Moderate ... 4 Extreme
+        * ``{prefix}_max_intensity``: peak anomaly of the event (degC)
+        * ``{prefix}_cum_intensity``: integrated anomaly (degC days)
+        * ``climatology``: seasonal climatological mean (degC)
+        * ``{prefix}_threshold``: seasonal percentile threshold (degC)
 
     Notes
     -----
@@ -1260,22 +1260,22 @@ def xrMHW_clim(ds, temp_var_name, clim_period=None, cold_spells=False,
         How the threshold relates to time (Smith et al. 2025, Prog. Oceanogr.
         231, 103404):
 
-        * ``'fixed'`` (default) — one reference period for the whole record.
-        * ``'detrended'`` — the long-term trend of the anomaly is fitted over
+        * ``'fixed'`` (default): one reference period for the whole record.
+        * ``'detrended'``: the long-term trend of the anomaly is fitted over
           the whole record and removed before the fixed climatology is
           computed; climatology and threshold then follow the trend. Options
           ``trend='linear'`` (default) or ``'polynomial'`` with ``degree``.
           A wrong trend shape gives spurious events (Smith et al., Box 1).
-        * ``'adaptation'`` — fixed threshold rising at ``rate`` degC per
+        * ``'adaptation'``: fixed threshold rising at ``rate`` degC per
           decade from the centre of the reference period, for an organism
           adapting at that rate. Only the threshold moves; the climatology
           stays fixed.
-        * ``'periodic'`` — the reference period is the ``ref_length`` years
+        * ``'periodic'``: the reference period is the ``ref_length`` years
           (default 30) before each period of ``update_every`` years (default
           10), as recommended by the WMO: e.g. 2021-2030 uses 1991-2020.
           Periods without a complete reference period before them use the
           first complete one in the record, with a warning.
-        * ``'shifting'`` — the reference period moves every year: with
+        * ``'shifting'``: the reference period moves every year: with
           ``align='lagged'`` (default) it is the ``window`` years (default 30)
           before the year, as in Smith et al.'s examples; ``'centred'`` uses the
           years around it. Years without a complete window use the nearest
@@ -1285,10 +1285,10 @@ def xrMHW_clim(ds, temp_var_name, clim_period=None, cold_spells=False,
           removed first, so that warming is not read as growing variability.
     **kwargs
         * **pctile** (int/float, default 90, or 10 for cold spells).
-        * **window_half_width** (int, default 5) — the window is ``2*w + 1`` days.
+        * **window_half_width** (int, default 5): the window is ``2*w + 1`` days.
         * **smooth_pctile** (bool, default True) and **smooth_width**
-          (int, default 31) — smoothing of climatology and threshold.
-        * **max_gap_interp** (int, default 2) — longest run of missing values
+          (int, default 31): smoothing of climatology and threshold.
+        * **max_gap_interp** (int, default 2): longest run of missing values
           filled by interpolation before the climatology is computed.
         * the options of the chosen baseline, listed above.
 
@@ -1600,13 +1600,13 @@ def xrMHW_events(ds, temp_var_name, clim, output_vars=None, **kwargs):
         to every date, and ``'rate_onset'`` and ``'rate_decline'`` (see
         `xrMHW_func`).
     **kwargs
-        * **min_duration** (int, default 5) — minimum event length in days.
+        * **min_duration** (int, default 5): minimum event length in days.
         * **join_across_gaps** (bool, default True) and **max_gap**
-          (int, default 2) — joining of events separated by a brief return to
+          (int, default 2): joining of events separated by a brief return to
           normal conditions.
         * **join_method** ({'post-filter', 'pre-filter'}, default
-          'post-filter') — order of joining relative to the duration filter.
-        * **max_gap_interp** (int) — longest run of missing values filled by
+          'post-filter'): order of joining relative to the duration filter.
+        * **max_gap_interp** (int): longest run of missing values filled by
           interpolation; by default the value used for `clim`, or 2.
 
     Returns
@@ -1969,28 +1969,28 @@ _PERIOD_DOC = """
         On the input grid with ``{dim}`` in place of the daily ``time``. With
         prefix ``mhw`` (or ``mcs``):
 
-        * ``mhw_count`` — events that start in the {when};
-        * ``mhw_days`` — event days in the calendar {when};
-        * ``mhw_ndays`` — days of the record in the {when} (fewer in a
+        * ``mhw_count``: events that start in the {when};
+        * ``mhw_days``: event days in the calendar {when};
+        * ``mhw_ndays``: days of the record in the {when} (fewer in a
           partial first or last {when}; ``mhw_days / mhw_ndays`` is the
           fraction of days in events);
-        * ``mhw_duration`` — mean duration of the events that start in the
+        * ``mhw_duration``: mean duration of the events that start in the
           {when} (NaN without events);
         * ``mhw_intensity_mean``, ``mhw_intensity_max``, ``mhw_intensity_var``
-          and ``mhw_intensity_cumulative`` — means over those events of their
+          and ``mhw_intensity_cumulative``: means over those events of their
           mean, peak, standard deviation and cumulative intensity;
-        * ``mhw_intensity_max_max`` — the largest peak among them (the most
+        * ``mhw_intensity_max_max``: the largest peak among them (the most
           negative for cold spells);
-        * ``mhw_total_icum`` — total cumulative intensity of the {when}, by
+        * ``mhw_total_icum``: total cumulative intensity of the {when}, by
           `cum_by`;
         * when ``events`` has the threshold and the climatology,
           ``mhw_intensity_max_relThresh``, ``..._mean_relThresh``,
-          ``..._var_relThresh`` and ``..._cumulative_relThresh`` — the same
+          ``..._var_relThresh`` and ``..._cumulative_relThresh``: the same
           relative to the threshold;
         * when ``events`` has ``mhw_rate_onset`` and ``mhw_rate_decline``,
           their means over the events that start in the {when};
         * when ``events`` has the severity, ``mhw_moderate_days`` …
-          ``mhw_extreme_days`` — event days in each Hobday et al. (2018)
+          ``mhw_extreme_days``: event days in each Hobday et al. (2018)
           category in the calendar {when} (floor of S: 1, 2, 3, 4 or more).
           Joined gap days count in ``mhw_days`` but in no category, as in
           marineHeatWaves.
@@ -2307,9 +2307,9 @@ def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
         Slope: Theil-Sen (median of the pairwise slopes; default) or ordinary
         least squares.
     test : {'mk', 'hamed_rao', 't', None}
-        * ``'mk'`` (default) — Mann-Kendall with the tie correction, as
+        * ``'mk'`` (default): Mann-Kendall with the tie correction, as
           ``pymannkendall.original_test``.
-        * ``'hamed_rao'`` — Mann-Kendall with the variance corrected for
+        * ``'hamed_rao'``: Mann-Kendall with the variance corrected for
           autocorrelation (Hamed & Rao 1998), as
           ``pymannkendall.hamed_rao_modification_test``. When the corrected
           variance is negative the p-value and the Sen interval are NaN, as
@@ -2317,9 +2317,9 @@ def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
           ``lag=3`` makes it rarer). With missing values the result differs
           from pymannkendall, which removes the trend as if the remaining
           values were consecutive; here it is removed at their true times.
-        * ``'t'`` — t-test of the least-squares slope, as
+        * ``'t'``: t-test of the least-squares slope, as
           ``scipy.stats.linregress`` (only with ``method='ols'``).
-        * ``None`` — no p-value.
+        * ``None``: no p-value.
     alpha : float
         Significance level of ``significant``, of the confidence interval
         (level ``1 - alpha``) and of the confidence band of the Hamed-Rao
@@ -2349,8 +2349,8 @@ def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
     Returns
     -------
     xr.Dataset
-        * ``slope`` — in the units of the data per `per`;
-        * ``slope_low``, ``slope_high`` — confidence interval at level
+        * ``slope``: in the units of the data per `per`;
+        * ``slope_low``, ``slope_high``: confidence interval at level
           ``1 - alpha``. Theil-Sen: Sen (1968), as
           ``scipy.stats.theilslopes``, with the variance of the chosen test
           (corrected for autocorrelation with Hamed-Rao, so that the interval
@@ -2360,7 +2360,7 @@ def xrMHW_trend(data, dim='year', method='sen', test='mk', alpha=0.05,
           significant;
         * ``p_value`` and ``significant`` (p < alpha), with a test;
         * ``significant_fdr``, with `fdr`;
-        * ``n_valid`` — non-missing values along `dim`.
+        * ``n_valid``: non-missing values along `dim`.
 
         For a Dataset input the names are prefixed with each variable's name
         (``mhw_days_slope``).

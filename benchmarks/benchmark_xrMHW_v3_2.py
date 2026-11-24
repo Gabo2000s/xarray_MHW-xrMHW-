@@ -335,7 +335,7 @@ def phase_scaling(ds, var, clim, outdir, prov, budget_frac):
     budget = budget_frac * psutil.virtual_memory().total
     rows, seen = [], set()
     print("\n" + "=" * 74)
-    print(" PHASE scaling — in-memory ladder (throughput and memory amplification)")
+    print(" PHASE scaling: in-memory ladder (throughput and memory amplification)")
     print("=" * 74)
     for nd, ns in cases:
         sub = subset(ds, var, nd, ns)
@@ -380,7 +380,7 @@ def phase_sweep(ds, var, clim, outdir, prov, depth, side, sides, output_vars=Non
     budget = budget_frac * psutil.virtual_memory().total
     rows = []
     print("\n" + "=" * 74)
-    print(f" PHASE sweep — chunk size on d{depth}x{side}x{side} "
+    print(f" PHASE sweep: chunk size on d{depth}x{side}x{side} "
           f"({raw / 1024**3:.2f} GiB raw, {cells} cells)")
     print("=" * 74)
     check_space(outdir, raw * (len(output_vars) if output_vars else 8), "sweep")
@@ -452,7 +452,7 @@ def phase_scheduler(ds, var, clim, outdir, prov, depth, side, chunk_side, worker
     tmp = outdir / "_sched.nc"
     rows = []
     print("\n" + "=" * 74)
-    print(f" PHASE scheduler — threads vs processes, d{depth}x{side}x{side}, "
+    print(f" PHASE scheduler: threads vs processes, d{depth}x{side}x{side}, "
           f"chunk side {chunk_side} ({n_chunks(sub, spec)} chunks), escritura: {fmt}")
     print("=" * 74)
     if fmt != "none":
@@ -524,7 +524,7 @@ def phase_ceiling(ds, var, clim, outdir, prov, amplification, chunk_side, side,
     output_vars = list(output_vars) if output_vars else None
 
     print("\n" + "=" * 74)
-    print(" PHASE ceiling — a domain the in-memory path cannot hold")
+    print(" PHASE ceiling: a domain the in-memory path cannot hold")
     print("=" * 74)
     dims = "x".join(str(sub.sizes[d]) for d in ("depth", "latitude", "longitude") if d in sub.sizes)
     print(f"  domain d{dims}: {cells} cells, {raw / 1024**3:.2f} GiB raw")
@@ -597,7 +597,7 @@ def phase_reference(ds, var, clim, outdir, prov, side):
     loaded = sub.load()
     rows, notes = [], []
     print("\n" + "=" * 74)
-    print(f" PHASE reference — same subset for all three: d1x{side}x{side} "
+    print(f" PHASE reference: same subset for all three: d1x{side}x{side} "
           f"({cells} cells, {raw / BYTES_PER_MIB:.1f} MiB)")
     print("=" * 74)
 
@@ -632,7 +632,7 @@ def phase_reference(ds, var, clim, outdir, prov, side):
         notes.append("marineHeatWaves not importable: clone "
                      "https://github.com/ecjoliver/marineHeatWaves and put marineHeatWaves.py "
                      "next to this script")
-        print("  marineHeatWaves            not importable — see note in the JSON")
+        print("  marineHeatWaves            not importable; see note in the JSON")
 
     try:
         from xmhw.xmhw import detect as xmhw_detect, threshold as xmhw_threshold
@@ -750,7 +750,7 @@ def main():
     prov["dask_threads"] = threads
 
     print("=" * 74)
-    print(f" xrMHW {prov['xrMHW_version']} benchmark v2 — {prov['host']}, {prov['cpu'][:34]}")
+    print(f" xrMHW {prov['xrMHW_version']} benchmark v2: {prov['host']}, {prov['cpu'][:34]}")
     print(f" {prov['physical_cores']} physical cores, {prov['total_ram_gib']} GiB RAM, "
           f"{prov['threads_pinned_to']} BLAS thread pinned, {threads} Dask threads")
     print(f" imported from {prov['xrMHW_origin']} ({prov['xrMHW_install_mode']})")
