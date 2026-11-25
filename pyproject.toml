@@ -52,8 +52,11 @@ test = [
     "pymannkendall>=1.4",
     "cftime>=1.6",
 ]
-# Everything the notebooks in examples/ use besides xrMHW itself
+# Everything the notebooks in examples/ use besides xrMHW itself.
+# xarray older than 2025.6.0 cannot open stores written with zarr 3.1 or later
+# (xr.open_zarr in notebook 04 fails with AttributeError).
 examples = [
+    "xarray>=2025.6.0",
     "pooch>=1.6",
     "matplotlib>=3.5",
     "cartopy>=0.21",

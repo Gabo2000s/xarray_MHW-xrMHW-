@@ -31,6 +31,9 @@ concept DOI [10.5281/zenodo.18343767](https://doi.org/10.5281/zenodo.18343767).
   and a cftime axis in the standard calendar failed with a misleading message.
 - CI also covers Python 3.13, runs on every pull request and installs `pymannkendall`
   and `cftime`, so the independent trend checks and the calendar tests run.
+- The `examples` extra and `examples/environment.yml` require xarray 2025.6.0 or later:
+  older versions fail to open Zarr stores written with zarr 3.1 or later
+  (`xr.open_zarr` in notebook 04).
 - `CITATION.cff`, `CHANGELOG.md` and a code of conduct; "Getting help" and a support
   statement in CONTRIBUTING.
 
