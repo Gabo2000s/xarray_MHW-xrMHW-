@@ -4,7 +4,7 @@ All notable changes to xrMHW are listed here. Versions follow
 [semantic versioning](https://semver.org/). Each release is archived on Zenodo under the
 concept DOI [10.5281/zenodo.18343767](https://doi.org/10.5281/zenodo.18343767).
 
-## [3.1.0] - unreleased
+## [3.1.0] - 2026-11-26
 
 ### Added
 - `xrMHW_clim` computes the climatology and threshold on their own; `xrMHW_events`
