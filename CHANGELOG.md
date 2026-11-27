@@ -6,6 +6,8 @@ concept DOI [10.5281/zenodo.18343767](https://doi.org/10.5281/zenodo.18343767).
 
 ## [3.1.0] - 2026-11-26
 
+Archived as [10.5281/zenodo.24593295](https://doi.org/10.5281/zenodo.24593295).
+
 ### Added
 - `xrMHW_clim` computes the climatology and threshold on their own; `xrMHW_events`
   applies a precomputed threshold (from `xrMHW_clim` or built by hand, on a `doy` or
