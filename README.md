@@ -1,4 +1,4 @@
-# xrMHW — Multidimensional Marine Heatwave Detector (Xarray + Dask)
+# xrMHW: parallel, out-of-core detection of surface and subsurface marine heatwaves
 
 A parallel, out-of-core Python implementation of the marine heatwave (MHW) definition of
 [Hobday et al. (2016)](https://doi.org/10.1016/j.pocean.2015.12.014), applied natively to
@@ -24,7 +24,7 @@ Marine heatwaves are increasingly studied below the surface, where they can be m
 intense, longer-lived and ecologically more consequential than their surface expression
 (Sun et al., 2023; Malan et al., 2025). Detecting them in a depth-resolved reanalysis
 means applying the Hobday definition independently to every cell of a four-dimensional
-grid — for a domain such as the Grand Banks at 1/12° with 33 depth levels and three
+grid. For a domain such as the Grand Banks at 1/12° with 33 depth levels and three
 decades of daily fields, that is hundreds of thousands of time series and far more data
 than fits in memory.
 
@@ -35,8 +35,8 @@ xrMHW keeps the definition intact and changes the execution model: detection is 
 over the spatial dimensions with `xarray.apply_ufunc` and Dask, so the computation
 streams over chunks, uses every available core, and returns results on the input grid
 with depth carried through untouched. It adds the diagnostics that depth-resolved work
-needs — in particular a dimensionless **severity index**, comparable across depths, and
-marine cold spell detection — while reproducing the reference implementation to
+needs, in particular a dimensionless **severity index**, comparable across depths, and
+marine cold spell detection, while reproducing the reference implementation to
 floating-point precision in its default configuration (see
 [Validation](#validation-against-the-reference-implementation)).
 
@@ -54,9 +54,18 @@ Other limitations:
 
 - **Daily resolution.** The climatology windows and the minimum-duration filter are
   defined in days.
-- **Standard calendars only.** The time coordinate must be convertible with
-  `.toordinal()`; `cftime` calendars (`noleap`, `360_day`) raise a `TypeError`. Convert
-  the calendar before calling xrMHW.
+- **Standard calendar only.** The 366-day climatology grid assumes the Gregorian
+  calendar. A time axis decoded with `cftime` in the standard calendar is accepted; any
+  other calendar (`noleap`, `365_day`, `360_day`, `julian`, …) raises a `ValueError`.
+  Model output in those calendars can be converted first:
+
+  ```python
+  ds = ds.convert_calendar("standard", align_on="year", missing=np.nan)
+  ```
+
+  Days that do not exist in the original calendar (29 February, or the days a
+  `360_day` calendar skips) become NaN, and gaps of up to `max_gap_interp` days are
+  interpolated.
 - **No spatial aggregation.** Regional averages, event catalogues and composites are
   left to the user's downstream analysis.
 
@@ -70,7 +79,7 @@ re-running an existing analysis.
 `out["threshold"]` must be updated; `output_vars=["threshold"]` still works as an alias.
 
 **New output.** `{prefix}_severity` is returned by default. `detect_mhw_core` and
-`mhw_1d_wrapper` now return nine arrays instead of eight, with severity appended last —
+`mhw_1d_wrapper` now return nine arrays instead of eight, with severity appended last;
 code that unpacks the tuple must be updated.
 
 **Results may differ.** Three corrections change detected events and their properties:
@@ -108,7 +117,7 @@ pip install -e ".[test]"
 ```
 
 Requires Python ≥ 3.10. Dependencies (`xarray`, `dask`, `netCDF4`, `scipy`, `pandas`,
-`numpy`) are installed automatically; the CI matrix covers Python 3.10, 3.11 and 3.12.
+`numpy`) are installed automatically; the CI matrix covers Python 3.10 to 3.13.
 
 ## Quick start
 
@@ -133,7 +142,7 @@ mhw = xrMHW.xrMHW_func(
 mhw.to_netcdf("MHW_output.nc")
 ```
 
-The same call works unchanged on a 4-D dataset with a `depth` dimension — the extra
+The same call works unchanged on a 4-D dataset with a `depth` dimension: the extra
 dimension is simply another axis to map over.
 
 **Only the continuous fields.** Requesting a subset skips the work the omitted fields
@@ -161,9 +170,144 @@ rather than after it (a documented departure from the standard definition):
 joined = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), join_method="pre-filter")
 ```
 
+**Climatology and events as two steps.** `xrMHW_clim` computes the seasonal
+climatology and threshold on a 366-day `doy` axis; `xrMHW_events` applies a
+threshold to a temperature field. Together they give exactly what `xrMHW_func` gives,
+and they let you store a climatology, reuse it for several detections, or apply it to
+another period or dataset:
+
+```python
+clim = xrMHW.xrMHW_clim(ds, "thetao", (1993, 2022))      # dims (..., doy)
+clim.to_netcdf("climatology_1993-2022.nc")
+
+mhw = xrMHW.xrMHW_events(ds, "thetao", clim)              # same events as xrMHW_func
+new = xrMHW.xrMHW_events(ds_2023, "thetao", clim)         # new data, same baseline
+```
+
+The threshold can also be built by hand, per day of year (`doy`, length 366, see
+`xrMHW.xrMHW_doy`) or per date (`time`). Which threshold variable it holds,
+`mhw_threshold` or `mcs_threshold`, decides whether heatwaves or cold spells are
+detected. Running the two steps reads the data twice, so for a single analysis
+`xrMHW_func` is faster.
+
+**Baselines.** The baseline sets how the threshold relates to time, and it changes the
+results in a warming ocean (Smith et al. 2025, *Prog. Oceanogr.* 231, 103404).
+`xrMHW_clim` and `xrMHW_func` take `baseline=`:
+
+| `baseline` | Threshold | Options |
+|---|---|---|
+| `"fixed"` (default) | one reference period for the whole record | `clim_period` |
+| `"detrended"` | follows the long-term trend of the anomaly, fitted over the whole record | `trend="linear"` or `"polynomial"` with `degree` |
+| `"adaptation"` | fixed threshold rising at `rate` degC per decade from the centre of the reference period (the climatology stays fixed) | `rate` |
+| `"periodic"` | each period of `update_every` years (10) uses the `ref_length` years (30) before it, as recommended by the WMO | `ref_length`, `update_every` |
+| `"shifting"` | each year uses its own window: the `window` years (30) before it (`align="lagged"`) or around it (`"centred"`); the trend is removed first by default | `window`, `align`, `detrend_first`, `trend`, `degree` |
+
+```python
+detr = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), baseline="detrended")
+adapt = xrMHW.xrMHW_func(ds, "thetao", (1993, 2022), baseline="adaptation", rate=0.1)
+```
+
+A wrong trend shape gives spurious events: a linear trend removed from a warming that
+accelerates leaves too many events at both ends of the record (Smith et al., Box 1).
+`xrMHW.xrMHW_detrend` returns the detrended field itself. With the periodic and
+shifting baselines, periods or years without a complete reference window use the
+nearest complete one in the record, which makes them a fixed baseline; a warning says
+which. Without detrending, a lagged shifting baseline gives more than 10 % of days
+above the 90th percentile in a warming record, because each year is compared with a
+cooler past (Smith et al., Box 1); `detrend_first=True` (the default) avoids it. The
+shifting baseline computes one climatology per distinct window: with 60 years of data
+and a 30-year window, its climatology takes about 25 times as long as the fixed one.
+
+### Annual and monthly metrics
+
+`xrMHW_annual` and `xrMHW_monthly` turn the daily event fields into one value per cell
+and calendar year or month: the quantities of marineHeatWaves' `blockAverage`. Events
+go to the year (month) in which they start; days to each calendar year (month). The
+result is small enough to keep in memory even when the detection was not.
+
+```python
+ann = xrMHW.xrMHW_annual(mhw)                          # year in place of time
+ann["mhw_days"].mean(("latitude", "longitude")).plot()  # event days per year
+dec = xrMHW.xrMHW_annual(mhw, block_length=10)          # blocks of 10 years
+mon = xrMHW.xrMHW_monthly(mhw)                          # monthly time, with year and month
+mon["mhw_days"].groupby("month").mean()                 # seasonal cycle
+```
+
+| Variable | Meaning |
+|---|---|
+| `mhw_count` | events that start in the year |
+| `mhw_days` | event days in the calendar year |
+| `mhw_ndays` | days of the record in the year (fewer in a partial first or last year); `mhw_days / mhw_ndays` is the fraction of days in events |
+| `mhw_duration` | mean duration of the events that start in the year |
+| `mhw_intensity_mean`, `mhw_intensity_max`, `mhw_intensity_var`, `mhw_intensity_cumulative` | means over those events of their mean, peak, standard deviation and cumulative intensity |
+| `mhw_intensity_max_max` | largest peak among them |
+| `mhw_total_icum` | total cumulative intensity of the year |
+| `mhw_intensity_max_relThresh` … `mhw_intensity_cumulative_relThresh` | the same intensities relative to the threshold (needs `climatology` and `mhw_threshold` in the input) |
+| `mhw_rate_onset`, `mhw_rate_decline` | mean onset and decline rates (needs `output_vars=[..., "rate_onset", "rate_decline"]` in the detection) |
+| `mhw_moderate_days` … `mhw_extreme_days` | event days in each category in the calendar year (needs `mhw_severity`) |
+
+The onset and decline rates are daily fields returned by `xrMHW_func` and
+`xrMHW_events` only when named in `output_vars`, so the default output does not change.
+
+`cum_by` sets where `mhw_total_icum` counts an event that crosses a year (month):
+`"start_year"` (default) puts its whole cumulative intensity in the year it starts, as
+`blockAverage` documents; `"calendar_year"` sums the daily intensities within each year
+(`"start_month"` and `"calendar_month"` for `xrMHW_monthly`). `blockAverage`'s code puts
+such an event in the year it ends; every other quantity, for heatwaves and cold spells
+and with blocks of several years, matches it exactly. Cells without data are NaN when
+the threshold or the climatology is in the input; otherwise pass `valid=`, for example
+`ds["thetao"].notnull().any("time")`, or a warning says that they show zero events.
+
+### Trends
+
+`xrMHW_trend` gives the trend of each cell along a dimension (the `year` of
+`xrMHW_annual`, the `time` of `xrMHW_monthly`), with its confidence interval, its
+significance and, optionally, field significance:
+
+```python
+tr = xrMHW.xrMHW_trend(ann["mhw_days"], method="sen", test="mk", fdr=0.10)
+# slope (per decade), slope_low, slope_high, p_value, significant, significant_fdr, n_valid
+trs = xrMHW.xrMHW_trend(ann, test="hamed_rao")   # every variable: mhw_days_slope, ...
+```
+
+| Option | Values |
+|---|---|
+| `method` | `"sen"` (Theil-Sen, default) or `"ols"` (least squares) |
+| `test` | `"mk"` (Mann-Kendall with tie correction, default), `"hamed_rao"` (corrected for autocorrelation; Hamed & Rao 1998), `"t"` (t-test of the least-squares slope) or `None` |
+| `alpha` | significance level and confidence level `1 - alpha` of the interval (default 0.05) |
+| `fdr` | `None` or the false discovery rate of Benjamini-Hochberg (Wilks 2016 recommends 0.10) |
+| `fdr_by` | where the false discovery rate is applied: `"auto"` (default; each `depth` level when there is one, else the whole field), dimension names, or `None` (whole field) |
+| `lag` | Hamed-Rao only: largest autocorrelation lag (all by default; Hamed & Rao suggest 3) |
+| `per` | `"decade"` (default), `"year"` or a number of coordinate units |
+| `min_valid` | cells with fewer non-missing values are NaN |
+
+The confidence interval of the Theil-Sen slope is Sen's (1968), as
+`scipy.stats.theilslopes`, with the variance of the chosen test: with `"hamed_rao"` it
+is widened for autocorrelation like the p-value. For least squares it is the t interval.
+With discrete series (event counts, event days with many zero years) many pairwise
+slopes are exactly zero, so the Theil-Sen slope or one bound of its interval can be
+exactly 0 while Mann-Kendall is significant: in the Grand Banks surface layer this
+happens for 28 % of the cells of the annual event count. Report the test, or use
+`method="ols"` for counts.
+
+Missing values are skipped, so a mean duration with years without events can be trended.
+Without missing values the results equal `pymannkendall` (`original_test`,
+`hamed_rao_modification_test`, also with `lag`) and `scipy.stats` (`theilslopes` with its
+interval, `linregress`, `false_discovery_control`) cell by cell. With missing values,
+Mann-Kendall and Sen still equal `pymannkendall`, but Hamed-Rao does not: `pymannkendall`
+removes the trend as if the remaining values were consecutive, xrMHW at their true times.
+As in `pymannkendall`, the Hamed-Rao p-value (and the Sen interval) is NaN where the
+corrected variance is negative: about 1.3 % of white-noise series of 33 values with all
+lags, 0.4 % with `lag=3`.
+
+The computation is vectorised over each block of cells and lazy with Dask. With `fdr`
+the p-values of the field are ranked, so the whole result is computed, once. Theil-Sen
+and Mann-Kendall use every pair of values, so they suit annual or monthly series; for
+long daily series use `method="ols", test="t"` (a warning says so).
+
 ## Example notebooks
 
-The [`examples/`](examples/) folder has six short notebooks that run on real data
+The [`examples/`](examples/) folder has seven short notebooks that run on real data
 downloaded automatically from Zenodo
 ([10.5281/zenodo.22909109](https://doi.org/10.5281/zenodo.22909109)):
 
@@ -175,6 +319,7 @@ downloaded automatically from Zenodo
 | [03 · Subsurface marine heatwaves](examples/03_subsurface_4D.ipynb) | Profiles, depth–time diagrams, sections, events hidden below the surface, 3-D view |
 | [04 · Many files, Dask and Zarr](examples/04_many_files_and_scaling.ipynb) | `open_mfdataset`, chunk planning from memory, a local cluster, Zarr output |
 | [05 · Troubleshooting](examples/05_troubleshooting.ipynb) | Common errors and silent pitfalls, with fixes |
+| [06 · Choosing a baseline](examples/06_baselines.ipynb) | The five baselines of Smith et al. (2025) on a synthetic warming series and on a GLORYS cell; annual and monthly metrics and trends with confidence intervals |
 
 Install their extra dependencies with `pip install ".[examples]"` or with the conda
 environment in [`examples/environment.yml`](examples/environment.yml).
@@ -188,7 +333,7 @@ environment in [`examples/environment.yml`](examples/environment.yml).
 
 | Variable | Description | Units |
 | :--- | :--- | :--- |
-| **Temperature** | Sea surface or potential temperature. | °C (or K — output anomalies inherit the input scale) |
+| **Temperature** | Sea surface or potential temperature. | °C (or K; output anomalies inherit the input scale) |
 
 Land and permanently masked cells (all-NaN series) are short-circuited and returned as
 NaN, which saves a large fraction of the work on realistic ocean domains. Short data
@@ -300,7 +445,7 @@ spells). Runs of exceedances are labelled, and runs shorter than `min_duration` 
 discarded.
 
 By default (`join_method='post-filter'`) **the minimum-duration filter is applied first,
-and surviving events separated by `max_gap` days or fewer are then joined** — the order
+and surviving events separated by `max_gap` days or fewer are then joined**, the order
 used by Hobday et al. (2016) and by the reference implementation. Setting
 `join_method='pre-filter'` bridges short gaps *before* the duration filter, so a long
 event fragmented by a brief dip survives as a single event instead of being discarded as
@@ -322,9 +467,9 @@ The same expression holds for cold spells, where numerator and denominator are b
 negative.
 
 It is the continuous form of the Hobday et al. (2018) categorisation: the category is
-`floor(S)` evaluated at the peak of the severity index — not at the peak of the raw
+`floor(S)` evaluated at the peak of the severity index (not at the peak of the raw
 anomaly, which is a different day whenever the threshold-to-mean distance varies within
-the event — and is capped at 4 (Extreme).
+the event) and is capped at 4 (Extreme).
 
 ## Validation against the reference implementation
 
@@ -353,7 +498,7 @@ Detection runs as a Python function mapped over the spatial dimensions by
 available cores and streams datasets larger than memory. Two costs that dominate a naive
 implementation are avoided: the day-of-year climatology is computed without a
 366-iteration loop, using a single percentile call over a strided gather, and the
-calendar arithmetic — identical for every cell — is computed once per time axis instead
+calendar arithmetic, identical for every cell, is computed once per time axis instead
 of once per cell.
 
 On a 30-year daily series this is of the order of **7 ms per grid cell on a single
@@ -396,8 +541,8 @@ test requirements.
 
 ## How to cite
 
-If xrMHW contributes to work you publish, please cite the archived software (the DOI below
-always resolves to the latest version; Zenodo also lists a DOI for each version):
+If xrMHW contributes to work you publish, please cite the archived software (the DOI
+below always resolves to the latest version; Zenodo also lists a DOI for each version):
 
 > Gutiérrez-Cárdenas, G. S., Cyr, F., Oliver, E. C. J., & Soontiens, N. (2026). *xrMHW:
 > parallel, out-of-core detection of surface and subsurface marine heatwaves*. Zenodo.
@@ -405,6 +550,9 @@ always resolves to the latest version; Zenodo also lists a DOI for each version)
 
 and the definition it implements (Hobday et al., 2016). Please also consider citing
 Oliver's `marineHeatWaves`, from which the detection logic is adapted.
+
+GitHub's "Cite this repository" button gives the same reference from
+[CITATION.cff](CITATION.cff).
 
 ## License
 

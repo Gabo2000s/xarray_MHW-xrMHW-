@@ -163,7 +163,7 @@ def main():
     chunk_shape = tuple(c[0] for c in chunked[args.var].chunks)
 
     print("=" * 74)
-    print(f" xrMHW {prov['xrMHW_version']} storage benchmark — {prov['host']}")
+    print(f" xrMHW {prov['xrMHW_version']} storage benchmark: {prov['host']}")
     print(f" domain {label}: {cells} cells x {nt} days; severity float32 = "
           f"{uncompressed / GiB:.2f} GiB uncompressed")
     print(f" chunks {dict(zip(dims, chunk_shape))}; zarr {prov['zarr']}, netCDF4 {prov['netCDF4']}")

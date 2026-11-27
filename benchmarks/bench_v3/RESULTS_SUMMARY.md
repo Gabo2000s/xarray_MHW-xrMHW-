@@ -33,14 +33,14 @@ GiB = 2³⁰ bytes; minutes = seconds / 60.
 | `{{PROC_E2E}}` | 4.2 | 4.165 | ceiling (processes): `end_to_end_est_s` | (247.09 + 2.82) s / 60 |
 | `{{PROC_PEAK}}` | 22.5 | 22.483 | ceiling (processes): `peak_rss_bytes` | 24,140,754,944 B / 2³⁰ (figure label: 22.5) |
 | `{{PROC_RATE}}` | 17.0 | 16.969 | ceiling (processes): `detect_cold_s` | 4.193 × 10⁹ / 247.09 s / 10⁶ |
-| `{{PROC_SPEEDUP}}` | 6.95 | 6.954 | — | 16.969 / 2.44 |
+| `{{PROC_SPEEDUP}}` | 6.95 | 6.954 | - | 16.969 / 2.44 |
 | `{{NC_RAW}}` | 17.2 | 17.208 | storage: case `a`, `bytes` | 18,476,708,123 B / 2³⁰; see note 5 |
 | `{{NC_ZLIB}}` | 1.29 | 1.285 | storage: case `b`, `bytes` | 1,379,845,315 B / 2³⁰ |
 | `{{ZARR}}` | 1.13 | 1.129 | storage: case `c`, `bytes` | 1,212,077,932 B / 2³⁰ |
-| `{{ZARR_CODEC}}` | Zstandard | — | storage: `codec` | `ZstdCodec(level=0, checksum=False)`, zarr-python 3.1.5 default, Zarr format 3; level 0 is Zstd's default level, 3 |
+| `{{ZARR_CODEC}}` | Zstandard | - | storage: `codec` | `ZstdCodec(level=0, checksum=False)`, zarr-python 3.1.5 default, Zarr format 3; level 0 is Zstd's default level, 3 |
 | `{{STORAGE_RATIO}}` | 15 | 15.24 | storage: `ratio_nc_raw_over_zarr` | 17.208 / 1.129 (13.39 against netCDF-4 with zlib: 17.208 / 1.285) |
 | `{{EVENT_FRACTION}}` | 9.4% | 9.353% | storage: `event_fraction_of_ocean_cell_days` | 325,817,171 event cell-days / (289,878 ocean cells × 12,017 days) |
-| `{{V3_DOI}}` | — | — | — | not available until the 3.0.0 release is archived on Zenodo; left as a placeholder |
+| `{{V3_DOI}}` | - | - | - | not available until the 3.0.0 release is archived on Zenodo; left as a placeholder |
 
 `{{THR_E2E}}`, `{{PROC_E2E}}`, `{{THR_RATE}}`, `{{ZARR_CODEC}}` and `{{EVENT_FRACTION}}`
 do not appear in the draft text; they are used in the figure or kept here for reference.
@@ -73,7 +73,7 @@ do not appear in the draft text; they are used in the figure or kept here for re
 | Threads, write | netCDF, 672.9 s (total − detect, cold/warm mixed) | Zarr, 82.2 s | not comparable |
 | Processes, full-domain detection | 269.1 s (4.5 min) | 247.1 s (4.1 min) | −8% |
 | Processes, peak | 21.76 GiB | 22.48 GiB | +3.3% |
-| Processes / threads, detection | 3.35× | 2.79× | — |
+| Processes / threads, detection | 3.35× | 2.79× | - |
 | Zarr output, severity | 1.13 GiB | 1.13 GiB (1,212,077,932 B, identical) | 0 |
 
 ## Notes for the text

@@ -10,7 +10,7 @@ dependencies:
   - numpy
   - pandas
   - scipy
-  - xarray
+  - xarray>=2025.6    # older versions cannot open stores written with zarr 3.1 or later
   - dask
   - distributed
   - netcdf4
